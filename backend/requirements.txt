@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 sqlalchemy[asyncio]
 asyncpg
+psycopg2-binary
 alembic
 httpx
 apscheduler

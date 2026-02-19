@@ -13,6 +13,15 @@ from .database import engine, Base
 from .routers import dashboard, orders, products, customers, stores
 from .scheduler.jobs import setup_scheduler
 
+# Import all models to register them with SQLAlchemy
+from .models import (
+    Store,
+    RawOrder, RawOrderItem, RawProduct, RawCustomer,
+    RawPayment, RawShipping, RawCategory, RawDiscount,
+    FactOrder, FactOrderItem,
+    DimCustomer, DimProduct, DimCategory, DimDate,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

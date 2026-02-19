@@ -3,7 +3,7 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/bi_shoper"
+    database_url: str = "postgresql+asyncpg://postgres:2402@localhost:5432/bi_shoper"
     sync_database_url: str = ""
 
     @property
