@@ -127,12 +127,13 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                 pay = await svc.sync_payments()
                 ship = await svc.sync_shipments()
                 cat = await svc.sync_categories()
+                stat = await svc.sync_statuses()
                 disc = await svc.sync_discounts()
                 await svc.close()
-                total = pay + ship + cat + disc
+                total = pay + ship + cat + stat + disc
                 logger.info(
-                    "Reference sync done for %s: payments=%d, shipments=%d, categories=%d, discounts=%d",
-                    store.name, pay, ship, cat, disc,
+                    "Reference sync done for %s: payments=%d, shipments=%d, categories=%d, statuses=%d, discounts=%d",
+                    store.name, pay, ship, cat, stat, disc,
                 )
                 results.append(
                     {
@@ -144,6 +145,7 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                             "payments": pay,
                             "shipments": ship,
                             "categories": cat,
+                            "statuses": stat,
                             "discounts": disc,
                         },
                     }
