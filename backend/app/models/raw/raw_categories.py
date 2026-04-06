@@ -1,5 +1,5 @@
 """RAW: Categories from Shoper API - staging table."""
-from sqlalchemy import BigInteger, String, Boolean, Integer, JSON, ForeignKey, DateTime, func
+from sqlalchemy import BigInteger, String, Boolean, Integer, JSON, ForeignKey, UniqueConstraint, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ...database import Base
 
@@ -7,12 +7,15 @@ from ...database import Base
 class RawCategory(Base):
     """Staging table for Categories from Shoper API. 1:1 mapping with API response."""
     __tablename__ = "raw_categories"
+    __table_args__ = (
+        UniqueConstraint("store_id", "category_id", name="uq_raw_categories_store_category"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
     
     # Shoper API fields (1:1 mapping)
-    category_id: Mapped[int] = mapped_column(BigInteger, index=True, unique=True)
+    category_id: Mapped[int] = mapped_column(BigInteger, index=True)
     root: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     

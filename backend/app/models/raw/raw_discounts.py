@@ -20,9 +20,12 @@ class RawDiscount(Base):
     code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     discount_type_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    max_discount_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     time_from: Mapped[str | None] = mapped_column(String(50), nullable=True)
     time_to: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    min_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     usage_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    peruser_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     usage_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[int | None] = mapped_column(Integer, nullable=True)
     
@@ -34,10 +37,9 @@ class RawDiscount(Base):
     date_to: Mapped[str | None] = mapped_column(String(50), nullable=True)
     discount_wholesale: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     discount_special: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
-    
-    # Nested objects stored as JSON
-    categories_limit: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    products_limit: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    condition_type: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Nested objects stored as JSON (Special offers: stocks per ShoperAPI-Reference.md)
     stocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
     
     # ETL metadata

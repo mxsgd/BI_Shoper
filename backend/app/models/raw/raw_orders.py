@@ -1,5 +1,5 @@
 """RAW: Orders from Shoper API - staging table."""
-from sqlalchemy import BigInteger, String, Numeric, DateTime, Integer, Boolean, JSON, ForeignKey, func
+from sqlalchemy import BigInteger, String, Numeric, DateTime, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ...database import Base
 
@@ -7,12 +7,15 @@ from ...database import Base
 class RawOrder(Base):
     """Staging table for Orders from Shoper API. 1:1 mapping with API response."""
     __tablename__ = "raw_orders"
+    __table_args__ = (
+        UniqueConstraint("store_id", "order_id", name="uq_raw_orders_store_order"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
     
     # Shoper API fields (1:1 mapping)
-    order_id: Mapped[int] = mapped_column(BigInteger, index=True, unique=True)
+    order_id: Mapped[int] = mapped_column(BigInteger, index=True)
     user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     date: Mapped[str] = mapped_column(String(50))  # ISO format from API
     status_date: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -42,8 +45,7 @@ class RawOrder(Base):
     status: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     billing_address: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     delivery_address: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    additional_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    
+
     # ETL metadata
     loaded_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=func.now())

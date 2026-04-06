@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,6 +7,7 @@ from sqlalchemy import select
 
 from ..database import get_db
 from ..models.store import Store
+from ..scheduler.jobs import run_sync_now
 
 router = APIRouter(prefix="/api/stores", tags=["stores"])
 
@@ -22,6 +25,13 @@ class StoreOut(BaseModel):
     is_active: bool
     last_sync_orders: str | None = None
     last_sync_products: str | None = None
+
+
+class SyncNowBody(BaseModel):
+    """Trigger the same sync logic as the background scheduler."""
+
+    store_id: int | None = None
+    scope: Literal["all", "orders", "products", "customers", "reference", "transform"] = "all"
 
 
 @router.get("/")
@@ -48,6 +58,26 @@ async def create_store(body: StoreCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(store)
     return {"id": store.id, "name": store.name}
+
+
+@router.post("/sync-now")
+async def sync_now(
+    body: SyncNowBody = SyncNowBody(),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Run sync immediately for all active stores, or one store if `store_id` is set.
+    `scope`: `all` (orders + products + customers), or a single phase.
+    """
+    if body.store_id is not None:
+        res = await db.execute(select(Store).where(Store.id == body.store_id))
+        store = res.scalar_one_or_none()
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+        if not store.is_active:
+            raise HTTPException(status_code=400, detail="Store is inactive")
+
+    return await run_sync_now(store_id=body.store_id, scope=body.scope)
 
 
 @router.delete("/{store_id}")

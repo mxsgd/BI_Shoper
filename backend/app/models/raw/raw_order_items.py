@@ -1,5 +1,5 @@
 """RAW: Order Products from Shoper API - staging table."""
-from sqlalchemy import BigInteger, String, Numeric, Integer, JSON, ForeignKey, DateTime, func
+from sqlalchemy import BigInteger, String, Numeric, Integer, ForeignKey, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ...database import Base
 
@@ -24,14 +24,7 @@ class RawOrderItem(Base):
     tax: Mapped[str | None] = mapped_column(String(50), nullable=True)
     tax_value: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     unit: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    
-    # Nested objects stored as JSON
-    warehouses: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    text_options: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    file_options: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    children: Mapped[list | None] = mapped_column(JSON, nullable=True)  # Bundle children
-    loyalty: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    
+
     # ETL metadata
     loaded_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=func.now())

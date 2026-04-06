@@ -1,10 +1,13 @@
-from sqlalchemy import String, Integer, Numeric, DateTime, ForeignKey, func
+from sqlalchemy import String, Integer, Numeric, DateTime, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..database import Base
 
 
 class Order(Base):
     __tablename__ = "orders"
+    __table_args__ = (
+        UniqueConstraint("store_id", "shoper_order_id", name="uq_orders_store_shoper"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)

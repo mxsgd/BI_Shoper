@@ -24,10 +24,12 @@ copy .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend (TODO)
+### Panel analityczny (iframe w panelu admin Shoper)
+
+Panel jest w katalogu `analytics-embed/`; osadzamy go w panelu administracyjnym Shopera (OAuth + iframe), nie na stronie sklepu. Zob. `docs/SHOPER_PANEL_APP.md`.
 
 ```bash
-cd frontend
+cd analytics-embed
 npm install
 npm run dev
 ```
@@ -43,5 +45,6 @@ Po uruchomieniu backendu: http://localhost:8000/docs
 - [x] Backend: analytics service + API routes
 - [x] Backend: scheduler
 - [ ] Alembic migracje
-- [ ] Frontend scaffold
-- [ ] Frontend strony
+- [ ] OAuth 2.0 / Partner API (panel w iframe)
+- [x] Panel (analytics-embed): scaffold
+- [ ] Panel: strony i wykresy

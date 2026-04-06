@@ -5,6 +5,8 @@
 Hurtownia danych (data warehouse) zasilana z API Shoper, umożliwiająca analizę biznesową:
 KPI, konwersję, LTV, RFM, kampanie, marżę, sezonowość, Pareto produktów.
 
+**Osadzanie:** Aplikacja jest osadzana w **panelu administracyjnym Shopera** (iframe po OAuth 2.0), nie na stronie sklepu. Rejestracja w Partner Portal, `panel_url` w manifestie. Szczegóły: `docs/SHOPER_PANEL_APP.md`.
+
 ---
 
 ## Architektura
@@ -48,7 +50,7 @@ graph TD
         TRANSFORM[ETL / Transformacje]
     end
 
-    subgraph frontend [React Dashboard]
+    subgraph frontend [Panel w iframe – Shoper admin]
         DASH[Dashboard KPI]
         CHARTS[Recharts]
     end
@@ -321,21 +323,17 @@ BI_Shoper/
 │   ├── alembic.ini
 │   ├── requirements.txt
 │   └── .env.example
-├── frontend/
+├── analytics-embed/                # Panel w iframe (Shoper admin), nie strona sklepu
 │   ├── src/
 │   │   ├── App.tsx
-│   │   ├── api/
 │   │   ├── components/
-│   │   │   ├── Layout.tsx
-│   │   │   ├── Sidebar.tsx
 │   │   │   └── charts/
-│   │   ├── pages/
-│   │   │   ├── Dashboard.tsx       # KPI cards + wykresy
-│   │   │   ├── Orders.tsx          # Analiza zamówień
-│   │   │   ├── Products.tsx        # Bestsellery, Pareto
-│   │   │   ├── Customers.tsx       # RFM, LTV, kohorty
-│   │   │   └── Settings.tsx        # Sklepy, sync status
-│   │   └── hooks/
+│   │   └── pages/
+│   │       ├── Dashboard.tsx       # KPI cards + wykresy
+│   │       ├── Orders.tsx          # Analiza zamówień
+│   │       ├── Products.tsx        # Bestsellery, Pareto
+│   │       ├── Customers.tsx       # RFM, LTV, kohorty
+│   │       └── Settings.tsx        # Sklepy / OAuth status
 │   ├── package.json
 │   └── vite.config.ts
 ├── PLAN.md
@@ -352,7 +350,7 @@ API Shoper  →  Sync Service  →  RAW (staging)  →  Transform  →  CORE (st
 
 1. **Sync** – pobiera dane z API Shoper, zapisuje do tabel `raw_*`
 2. **Transform** – przetwarza RAW → CORE (deduplikacja, agregacja, kalkulacja RFM/LTV)
-3. **API** – serwuje dane z CORE do frontendu
+3. **API** – serwuje dane z CORE do panelu (iframe w panelu admin Shoper)
 
 ### Harmonogram (scheduler)
 
@@ -390,16 +388,20 @@ API Shoper  →  Sync Service  →  RAW (staging)  →  Transform  →  CORE (st
 ## Status realizacji
 
 - [x] Plan i architektura
-- [x] Backend: config, database, modele (stara wersja operacyjna)
+- [x] Backend: config, database
 - [x] Backend: Shoper API client (z retry/pagination)
-- [x] Backend: sync service (podstawowy)
+- [x] Backend: sync service (podstawowy) – zapis do tabel legacy (orders, products, customers)
 - [x] Backend: analytics service + API routes (podstawowe)
-- [x] Backend: scheduler
-- [ ] **Refaktor modeli → warstwa RAW + CORE (star schema)**
-- [ ] ETL: transform service (RAW → CORE)
-- [ ] seed_dim_date
-- [ ] Kalkulacje RFM / LTV
+- [x] Backend: scheduler (orders/1h, products/6h, customers/24h)
+- [x] **Modele RAW + CORE (star schema)** – tabele w DB gotowe
+- [ ] **Sync → RAW** – zmiana sync_service: zapisywać do raw_orders, raw_order_items, raw_products, raw_customers (zamiast orders/products/customers)
+- [ ] **ETL: transform service** – RAW → CORE (fact_orders, fact_order_items, dim_*)
+- [x] Skrypt seed_dim_date (do ręcznego uruchomienia)
+- [ ] Zadanie scheduler: transform_core, refresh_rfm, refresh_dim_date
+- [ ] Kalkulacje RFM / LTV (analytics)
 - [ ] Alembic migracje
-- [ ] Frontend scaffold
-- [ ] Frontend strony (Dashboard, Orders, Products, Customers)
+- [ ] **OAuth 2.0 + Partner API** – callback, przechowywanie tokenów per sklep (zob. docs/SHOPER_PANEL_APP.md)
+- [x] Panel (analytics-embed): scaffold Vite + React
+- [ ] Panel: strony (Dashboard, Orders, Products, Customers), wykresy
+- [ ] Panel: identyfikacja sklepu z iframe (parametr shop / kontekst OAuth)
 - [ ] Rozszerzenie PRO: fact_marketing
