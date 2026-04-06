@@ -7,6 +7,7 @@ from .raw_payments import RawPayment
 from .raw_shipments import RawShipping
 from .raw_categories import RawCategory
 from .raw_discounts import RawDiscount
+from .raw_statuses import RawStatus
 
 __all__ = [
     "RawOrder",
@@ -17,4 +18,5 @@ __all__ = [
     "RawShipping",
     "RawCategory",
     "RawDiscount",
+    "RawStatus",
 ]
