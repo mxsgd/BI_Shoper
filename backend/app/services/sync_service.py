@@ -17,6 +17,8 @@ from ..models.customer import Customer
 from ..models.raw import (
     RawOrder, RawOrderItem, RawProduct, RawCustomer,
     RawPayment, RawShipping, RawCategory, RawDiscount, RawStatus,
+    RawProducer, RawTax, RawProductStock, RawParcel, RawUserGroup, RawCurrency,
+    RawSubscriber,
 )
 from .shoper_client import ShoperClient
 
@@ -280,6 +282,212 @@ class SyncService:
         return count
 
     # ------------------------------------------------------------------
+    # Producers (reference data)
+    # ------------------------------------------------------------------
+    async def sync_producers(self) -> int:
+        items = await self.client.get_all("/producers")
+        count = 0
+        for p in items:
+            row = _shoper_producer_to_raw_row(self.store.id, p)
+            if not row:
+                continue
+            stmt = pg_insert(RawProducer).values(**row)
+            exclude = {"store_id", "producer_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "producer_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d producers for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Taxes (reference data)
+    # ------------------------------------------------------------------
+    async def sync_taxes(self) -> int:
+        items = await self.client.get_all("/taxes")
+        count = 0
+        for t in items:
+            row = _shoper_tax_to_raw_row(self.store.id, t)
+            if not row:
+                continue
+            stmt = pg_insert(RawTax).values(**row)
+            exclude = {"store_id", "tax_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "tax_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d taxes for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Product Stocks (variant/SKU level)
+    # ------------------------------------------------------------------
+    async def sync_product_stocks(self) -> int:
+        items = await self.client.get_all("/product-stocks")
+        count = 0
+        for s in items:
+            row = _shoper_product_stock_to_raw_row(self.store.id, s)
+            if not row:
+                continue
+            stmt = pg_insert(RawProductStock).values(**row)
+            exclude = {"store_id", "stock_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "stock_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d product stocks for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Parcels (fulfillment tracking)
+    # ------------------------------------------------------------------
+    async def sync_parcels(self) -> int:
+        items = await self.client.get_all("/parcels")
+        count = 0
+        for p in items:
+            row = _shoper_parcel_to_raw_row(self.store.id, p)
+            if not row:
+                continue
+            stmt = pg_insert(RawParcel).values(**row)
+            exclude = {"store_id", "parcel_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "parcel_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d parcels for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # User Groups (reference data)
+    # ------------------------------------------------------------------
+    async def sync_user_groups(self) -> int:
+        items = await self.client.get_all("/user-groups")
+        count = 0
+        for g in items:
+            row = _shoper_user_group_to_raw_row(self.store.id, g)
+            if not row:
+                continue
+            stmt = pg_insert(RawUserGroup).values(**row)
+            exclude = {"store_id", "group_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "group_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d user groups for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Currencies (reference data)
+    # ------------------------------------------------------------------
+    async def sync_currencies(self) -> int:
+        items = await self.client.get_all("/currencies")
+        count = 0
+        for c in items:
+            row = _shoper_currency_to_raw_row(self.store.id, c)
+            if not row:
+                continue
+            stmt = pg_insert(RawCurrency).values(**row)
+            exclude = {"store_id", "currency_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "currency_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d currencies for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Subscribers (newsletter)
+    # ------------------------------------------------------------------
+    async def sync_subscribers(self) -> int:
+        items = await self.client.get_all("/subscribers")
+        count = 0
+        for s in items:
+            row = _shoper_subscriber_to_raw_row(self.store.id, s)
+            if not row:
+                continue
+            stmt = pg_insert(RawSubscriber).values(**row)
+            exclude = {"store_id", "subscriber_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "subscriber_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d subscribers for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Categories Tree (hierarchy for dim_categories.parent_id)
+    # ------------------------------------------------------------------
+    async def sync_categories_tree(self) -> int:
+        """Fetch /categories-tree and update parent_id in raw_categories."""
+        tree = await self.client.get_all("/categories-tree")
+        count = 0
+
+        def _walk(nodes, parent_id=None):
+            nonlocal count
+            if isinstance(nodes, dict):
+                nodes = list(nodes.values())
+            for node in nodes:
+                cat_id = node.get("id")
+                if cat_id and parent_id is not None:
+                    updates.append({"cat_id": int(cat_id), "parent_id": int(parent_id)})
+                    count += 1
+                children = node.get("__children")
+                if children:
+                    _walk(children, parent_id=cat_id)
+
+        updates: list[dict] = []
+        if isinstance(tree, list):
+            for root in tree:
+                cat_id = root.get("id")
+                children = root.get("__children")
+                if children:
+                    _walk(children, parent_id=cat_id)
+        elif isinstance(tree, dict):
+            _walk(tree, parent_id=None)
+
+        from sqlalchemy import text as sa_text
+        for u in updates:
+            await self.db.execute(
+                sa_text(
+                    "UPDATE raw_categories SET translations = "
+                    "jsonb_set(COALESCE(translations, '{}')::jsonb, '{_parent_id}', :pid::text::jsonb) "
+                    "WHERE store_id = :sid AND category_id = :cid"
+                ),
+                {"pid": str(u["parent_id"]), "sid": self.store.id, "cid": u["cat_id"]},
+            )
+        await self.db.commit()
+        logger.info("Updated %d category parent links for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
     # Discounts (promotion codes + special offers)
     # ------------------------------------------------------------------
     async def sync_discounts(self) -> int:
@@ -296,6 +504,7 @@ class SyncService:
                 self.db.add(RawDiscount(**row))
                 count += 1
 
+        # Some stores (e.g. franchise variants) may not have the module enabled.
         specials = await self.client.get_all("/special-offers")
         for s in specials:
             row = _shoper_special_offer_to_raw_row(self.store.id, s)
@@ -671,4 +880,139 @@ def _shoper_special_offer_to_raw_row(store_id: int, s: dict) -> dict | None:
         "discount_special": _float_or_zero(s.get("discount_special")) if s.get("discount_special") is not None else None,
         "condition_type": _int_or_none(s.get("condition_type")),
         "stocks": _json_safe(s.get("stocks")),
+    }
+
+
+def _shoper_producer_to_raw_row(store_id: int, p: dict) -> dict | None:
+    pid = _int_or_none(p.get("producer_id", p.get("id")))
+    if not pid:
+        return None
+    return {
+        "store_id": store_id,
+        "producer_id": pid,
+        "name": p.get("name"),
+        "web": p.get("web"),
+        "isdefault": _bool_from_shoper(p.get("isdefault")),
+        "translations": _json_safe(p.get("translations")),
+    }
+
+
+def _shoper_tax_to_raw_row(store_id: int, t: dict) -> dict | None:
+    tid = _int_or_none(t.get("tax_id", t.get("id")))
+    if not tid:
+        return None
+    return {
+        "store_id": store_id,
+        "tax_id": tid,
+        "value": _float_or_zero(t.get("value")),
+        "name": t.get("name"),
+        "tax_class": t.get("class"),
+    }
+
+
+def _shoper_product_stock_to_raw_row(store_id: int, s: dict) -> dict | None:
+    sid = _int_or_none(s.get("stock_id", s.get("id")))
+    pid = _int_or_none(s.get("product_id"))
+    if not sid or not pid:
+        return None
+    opts = s.get("options")
+    if isinstance(opts, tuple):
+        opts = list(opts)
+    elif opts is not None and not isinstance(opts, list):
+        opts = None
+    return {
+        "store_id": store_id,
+        "stock_id": sid,
+        "product_id": pid,
+        "extended": _bool_from_shoper(s.get("extended")),
+        "active": _bool_from_shoper(s.get("active")),
+        "default": _bool_from_shoper(s.get("default")),
+        "code": s.get("code"),
+        "ean": s.get("ean"),
+        "price": _float_or_zero(s.get("price")),
+        "price_wholesale": _float_or_zero(s.get("price_wholesale")) if s.get("price_wholesale") is not None else None,
+        "price_special": _float_or_zero(s.get("price_special")) if s.get("price_special") is not None else None,
+        "price_buying": _float_or_zero(s.get("price_buying")) if s.get("price_buying") is not None else None,
+        "stock": _float_or_zero(s.get("stock")),
+        "warn_level": _float_or_zero(s.get("warn_level")) if s.get("warn_level") is not None else None,
+        "sold": _float_or_zero(s.get("sold")),
+        "weight": _float_or_zero(s.get("weight")),
+        "availability_id": _int_or_none(s.get("availability_id")),
+        "delivery_id": _int_or_none(s.get("delivery_id")),
+        "warehouses": _json_safe(s.get("warehouses")),
+        "options": opts,
+        "special_offer": _json_safe(s.get("special_offer")),
+    }
+
+
+def _shoper_parcel_to_raw_row(store_id: int, p: dict) -> dict | None:
+    pid = _int_or_none(p.get("parcel_id", p.get("id")))
+    if not pid:
+        return None
+    prods = p.get("products")
+    if isinstance(prods, dict):
+        prods = list(prods.values())
+    return {
+        "store_id": store_id,
+        "parcel_id": pid,
+        "order_id": _int_or_none(p.get("order_id")) or 0,
+        "shipping_id": _int_or_none(p.get("shipping_id")),
+        "shipping_code": p.get("shipping_code"),
+        "weight": _float_or_zero(p.get("weight")),
+        "send_date": p.get("send_date"),
+        "delivery_date": p.get("delivery_date"),
+        "order_date": p.get("order_date"),
+        "insurance": _bool_from_shoper(p.get("insurance")),
+        "insurance_cost": _float_or_zero(p.get("insurance_cost")),
+        "cod": _bool_from_shoper(p.get("cod")),
+        "cod_cost": _float_or_zero(p.get("cod_cost")),
+        "sent": _bool_from_shoper(p.get("sent")),
+        "warehouse_id": _int_or_none(p.get("warehouse_id")),
+        "delivery_address": _json_safe(p.get("delivery_address")),
+        "products": prods if isinstance(prods, list) else None,
+    }
+
+
+def _shoper_user_group_to_raw_row(store_id: int, g: dict) -> dict | None:
+    gid = _int_or_none(g.get("group_id", g.get("id")))
+    if not gid:
+        return None
+    return {
+        "store_id": store_id,
+        "group_id": gid,
+        "name": g.get("name"),
+        "discount": _float_or_zero(g.get("discount")),
+        "price_level": _int_or_none(g.get("price_level")),
+        "auto_add": _bool_from_shoper(g.get("auto_add")),
+    }
+
+
+def _shoper_currency_to_raw_row(store_id: int, c: dict) -> dict | None:
+    cid = _int_or_none(c.get("currency_id", c.get("id")))
+    if not cid:
+        return None
+    return {
+        "store_id": store_id,
+        "currency_id": cid,
+        "name": c.get("name"),
+        "rate": _float_or_zero(c.get("rate")) or 1,
+        "active": _bool_from_shoper(c.get("active")),
+        "is_default": _bool_from_shoper(c.get("default")),
+        "rate_sync": _float_or_zero(c.get("rate_sync")) if c.get("rate_sync") is not None else None,
+        "rate_date": c.get("rate_date"),
+    }
+
+
+def _shoper_subscriber_to_raw_row(store_id: int, s: dict) -> dict | None:
+    sid = _int_or_none(s.get("subscriber_id", s.get("id")))
+    if not sid:
+        return None
+    return {
+        "store_id": store_id,
+        "subscriber_id": sid,
+        "email": s.get("email"),
+        "active": _bool_from_shoper(s.get("active")),
+        "dateadd": s.get("dateadd"),
+        "ipaddress": s.get("ipaddress"),
+        "lang_id": _int_or_none(s.get("lang_id")),
     }

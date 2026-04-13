@@ -74,10 +74,11 @@ class TransformService:
                     rc.translations -> 'en_GB' ->> 'name',
                     'Category #' || rc.category_id
                 ),
-                NULL
+                (rc.translations ->> '_parent_id')::int
             FROM raw_categories rc
             ON CONFLICT (category_id) DO UPDATE SET
-                category_name = EXCLUDED.category_name
+                category_name = EXCLUDED.category_name,
+                parent_id     = EXCLUDED.parent_id
         """)
         result = await self.db.execute(sql)
         await self.db.commit()
@@ -101,17 +102,30 @@ class TransformService:
                     'Product #' || rp.product_id
                 ),
                 rp.category_id,
-                NULL,
-                (rp.stock ->> 'price_wholesale')::numeric,
-                (rp.stock ->> 'price')::numeric,
+                rprod.name,
+                COALESCE(
+                    base_stock.price_buying,
+                    (rp.stock ->> 'price_wholesale')::numeric
+                ),
+                COALESCE(
+                    base_stock.price,
+                    (rp.stock ->> 'price')::numeric
+                ),
                 COALESCE(
                     (rp.translations -> 'pl_PL' ->> 'active')::int = 1,
                     true
                 )
             FROM raw_products rp
+            LEFT JOIN raw_producers rprod
+                ON rprod.store_id = rp.store_id AND rprod.producer_id = rp.producer_id
+            LEFT JOIN raw_product_stocks base_stock
+                ON base_stock.store_id = rp.store_id
+                AND base_stock.product_id = rp.product_id
+                AND COALESCE(base_stock.extended, false) = false
             ON CONFLICT (product_id) DO UPDATE SET
                 product_name = EXCLUDED.product_name,
                 category_id  = EXCLUDED.category_id,
+                brand        = EXCLUDED.brand,
                 cost_price   = EXCLUDED.cost_price,
                 retail_price = EXCLUDED.retail_price,
                 is_active    = EXCLUDED.is_active,
@@ -143,6 +157,7 @@ class TransformService:
             FROM raw_customers rc
             LEFT JOIN (
                 SELECT
+                    ro.store_id,
                     ro.user_id,
                     MIN({_sql_safe_timestamp("ro.date")}) AS first_order,
                     MAX({_sql_safe_timestamp("ro.date")}) AS last_order,
@@ -150,8 +165,8 @@ class TransformService:
                     SUM(ro.sum)             AS revenue
                 FROM raw_orders ro
                 WHERE ro.user_id IS NOT NULL
-                GROUP BY ro.user_id
-            ) agg ON agg.user_id = rc.user_id
+                GROUP BY ro.store_id, ro.user_id
+            ) agg ON agg.store_id = rc.store_id AND agg.user_id = rc.user_id
             ON CONFLICT (customer_id) DO UPDATE SET
                 first_order_date = EXCLUDED.first_order_date,
                 last_order_date  = EXCLUDED.last_order_date,
@@ -162,7 +177,27 @@ class TransformService:
         """)
         result = await self.db.execute(sql)
         await self.db.commit()
-        return result.rowcount
+        count = result.rowcount
+
+        rfm_sql = text("""
+            WITH rfm AS (
+                SELECT
+                    customer_id,
+                    NTILE(5) OVER (ORDER BY last_order_date ASC)  AS r,
+                    NTILE(5) OVER (ORDER BY total_orders)         AS f,
+                    NTILE(5) OVER (ORDER BY total_revenue)        AS m
+                FROM dim_customers
+                WHERE total_orders > 0
+            )
+            UPDATE dim_customers dc
+            SET rfm_score = rfm.r::text || rfm.f::text || rfm.m::text,
+                updated_at = now()
+            FROM rfm
+            WHERE dc.customer_id = rfm.customer_id
+        """)
+        await self.db.execute(rfm_sql)
+        await self.db.commit()
+        return count
 
     # ------------------------------------------------------------------
     # fact_orders
@@ -172,7 +207,7 @@ class TransformService:
             f"WHEN {k} THEN '{v}'" for k, v in ORIGIN_MAP.items()
         )
         ts_order = _sql_safe_timestamp("ro.date")
-        ts_confirm = _sql_safe_timestamp("ro.confirm_date")
+        ts_status = _sql_safe_timestamp("ro.status_date")
         sql = text(f"""
             INSERT INTO fact_orders (
                 order_id, store_id, customer_id,
@@ -188,23 +223,45 @@ class TransformService:
                 ro.store_id,
                 ro.user_id,
                 COALESCE({ts_order}, '1970-01-01 00:00:00+00'::timestamptz),
-                CASE WHEN ro.is_paid THEN {ts_confirm} ELSE NULL END,
-                ro.status ->> 'name',
+                CASE WHEN ro.is_paid THEN {ts_status} ELSE NULL END,
+                COALESCE(rs.name, 'Status #' || ro.status_id),
                 CASE WHEN ro.is_paid THEN 'paid' ELSE 'unpaid' END,
                 NULL,
                 ro.sum,
-                ro.sum,
+                COALESCE(items_net.total_net, ro.sum),
                 GREATEST(
                     ro.discount_client + ro.discount_group
                     + ro.discount_levels + ro.discount_code, 0
                 ),
                 ro.shipping_cost,
-                0,
-                0,
+                ro.sum - COALESCE(items_net.total_net, ro.sum),
+                COALESCE(items_cost.total_cost, 0),
                 COALESCE(ro.total_products, 0),
                 CASE ro.origin {origin_cases} ELSE 'other' END,
                 ro.promo_code
             FROM raw_orders ro
+            LEFT JOIN raw_statuses rs
+                ON rs.store_id = ro.store_id AND rs.status_id = ro.status_id
+            LEFT JOIN (
+                SELECT roi.store_id, roi.order_id,
+                       SUM(roi.price * roi.quantity
+                           / (1 + COALESCE(NULLIF(roi.tax_value, 0), 23) / 100.0))
+                       AS total_net
+                FROM raw_order_items roi
+                GROUP BY roi.store_id, roi.order_id
+            ) items_net
+                ON items_net.store_id = ro.store_id AND items_net.order_id = ro.order_id
+            LEFT JOIN (
+                SELECT roi2.store_id, roi2.order_id,
+                       SUM(COALESCE(ps.price_buying, 0) * roi2.quantity) AS total_cost
+                FROM raw_order_items roi2
+                LEFT JOIN raw_product_stocks ps
+                    ON ps.store_id = roi2.store_id
+                    AND ps.product_id = roi2.product_id
+                    AND COALESCE(ps.extended, false) = false
+                GROUP BY roi2.store_id, roi2.order_id
+            ) items_cost
+                ON items_cost.store_id = ro.store_id AND items_cost.order_id = ro.order_id
             ON CONFLICT (order_id) DO UPDATE SET
                 customer_id    = EXCLUDED.customer_id,
                 order_date     = EXCLUDED.order_date,
@@ -215,6 +272,8 @@ class TransformService:
                 net_value      = EXCLUDED.net_value,
                 discount_value = EXCLUDED.discount_value,
                 shipping_value = EXCLUDED.shipping_value,
+                tax_value      = EXCLUDED.tax_value,
+                margin_value   = EXCLUDED.margin_value,
                 items_count    = EXCLUDED.items_count,
                 source_channel = EXCLUDED.source_channel,
                 campaign       = EXCLUDED.campaign,
@@ -243,14 +302,18 @@ class TransformService:
                 rp.category_id,
                 roi.quantity::int,
                 roi.price,
-                roi.price / (1 + COALESCE(NULLIF(roi.tax_value, 0), 23) / 100.0),
+                roi.price / (1 + COALESCE(rt.value, NULLIF(roi.tax_value, 0), 23) / 100.0),
                 roi.price * roi.discount_perc / 100.0,
                 roi.price * roi.quantity,
-                roi.price * roi.quantity / (1 + COALESCE(NULLIF(roi.tax_value, 0), 23) / 100.0),
+                roi.price * roi.quantity / (1 + COALESCE(rt.value, NULLIF(roi.tax_value, 0), 23) / 100.0),
                 COALESCE({ts_order}, '1970-01-01 00:00:00+00'::timestamptz)
             FROM raw_order_items roi
-            JOIN raw_orders ro ON ro.order_id = roi.order_id
-            LEFT JOIN raw_products rp ON rp.product_id = roi.product_id
+            JOIN raw_orders ro
+                ON ro.store_id = roi.store_id AND ro.order_id = roi.order_id
+            LEFT JOIN raw_products rp
+                ON rp.store_id = roi.store_id AND rp.product_id = roi.product_id
+            LEFT JOIN raw_taxes rt
+                ON rt.store_id = rp.store_id AND rt.tax_id = rp.tax_id
             ON CONFLICT (order_item_id) DO UPDATE SET
                 product_id       = EXCLUDED.product_id,
                 category_id      = EXCLUDED.category_id,

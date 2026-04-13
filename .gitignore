@@ -9,3 +9,5 @@ dist/
 .vscode/
 *.log
 backend/app/config.py
+docs/shops_config.py
+Shoper_Documentation_Link.txt

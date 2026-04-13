@@ -4,7 +4,7 @@ Runs order sync hourly, products every 6h, customers daily.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -14,6 +14,7 @@ from ..database import async_session
 from ..models.store import Store
 from ..services.sync_service import SyncService
 from ..services.transform_service import TransformService
+from ..services.ga4_client import GA4SyncService
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -129,11 +130,23 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                 cat = await svc.sync_categories()
                 stat = await svc.sync_statuses()
                 disc = await svc.sync_discounts()
+                prod = await svc.sync_producers()
+                tax = await svc.sync_taxes()
+                pstk = await svc.sync_product_stocks()
+                parc = await svc.sync_parcels()
+                ugrp = await svc.sync_user_groups()
+                curr = await svc.sync_currencies()
+                subs = await svc.sync_subscribers()
+                ctree = await svc.sync_categories_tree()
                 await svc.close()
-                total = pay + ship + cat + stat + disc
+                total = pay + ship + cat + stat + disc + prod + tax + pstk + parc + ugrp + curr + subs + ctree
                 logger.info(
-                    "Reference sync done for %s: payments=%d, shipments=%d, categories=%d, statuses=%d, discounts=%d",
+                    "Reference sync done for %s: payments=%d, shipments=%d, "
+                    "categories=%d, statuses=%d, discounts=%d, producers=%d, "
+                    "taxes=%d, stocks=%d, parcels=%d, user_groups=%d, "
+                    "currencies=%d, subscribers=%d, cat_tree=%d",
                     store.name, pay, ship, cat, stat, disc,
+                    prod, tax, pstk, parc, ugrp, curr, subs, ctree,
                 )
                 results.append(
                     {
@@ -147,6 +160,14 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                             "categories": cat,
                             "statuses": stat,
                             "discounts": disc,
+                            "producers": prod,
+                            "taxes": tax,
+                            "product_stocks": pstk,
+                            "parcels": parc,
+                            "user_groups": ugrp,
+                            "currencies": curr,
+                            "subscribers": subs,
+                            "categories_tree": ctree,
                         },
                     }
                 )
@@ -195,7 +216,34 @@ async def transform_core():
     await run_transform()
 
 
-SyncScope = Literal["all", "orders", "products", "customers", "reference", "transform"]
+async def run_ga4_sync() -> dict:
+    """Pull yesterday's GA4 data into raw_ga4_* tables."""
+    async with async_session() as db:
+        try:
+            svc = GA4SyncService(db)
+            yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+            return await svc.sync_day(yesterday)
+        except Exception as e:
+            logger.error("GA4 sync failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+
+async def run_ga4_backfill() -> dict:
+    """Backfill last 90 days of GA4 data if tables are empty."""
+    async with async_session() as db:
+        try:
+            svc = GA4SyncService(db)
+            return await svc.backfill(90)
+        except Exception as e:
+            logger.error("GA4 backfill failed: %s", e)
+            return {"ok": False, "error": str(e)}
+
+
+async def sync_ga4_daily():
+    await run_ga4_sync()
+
+
+SyncScope = Literal["all", "orders", "products", "customers", "reference", "transform", "ga4"]
 
 
 async def run_sync_now(
@@ -213,6 +261,8 @@ async def run_sync_now(
         out["reference"] = await run_reference_sync(store_id)
     if scope in ("all", "transform"):
         out["transform"] = await run_transform()
+    if scope in ("all", "ga4"):
+        out["ga4"] = await run_ga4_sync()
     return out
 
 
@@ -222,5 +272,6 @@ def setup_scheduler():
     scheduler.add_job(sync_all_stores_customers, "interval", hours=24, id="sync_customers")
     scheduler.add_job(sync_all_stores_reference, "interval", hours=24, id="sync_reference")
     scheduler.add_job(transform_core, "interval", hours=1, id="transform_core", misfire_grace_time=300)
+    scheduler.add_job(sync_ga4_daily, "cron", hour=6, minute=0, id="sync_ga4", misfire_grace_time=3600)
     scheduler.start()
-    logger.info("Scheduler started: orders/1h, products/6h, customers/24h, reference/24h, transform/1h")
+    logger.info("Scheduler started: orders/1h, products/6h, customers/24h, reference/24h, transform/1h, ga4/daily@06:00")

@@ -392,12 +392,14 @@ API Shoper  →  Sync Service  →  RAW (staging)  →  Transform  →  CORE (st
 - [x] Backend: Shoper API client (z retry/pagination)
 - [x] Backend: sync service (podstawowy) – zapis do tabel legacy (orders, products, customers)
 - [x] Backend: analytics service + API routes (podstawowe)
-- [x] Backend: scheduler (orders/1h, products/6h, customers/24h)
+- [x] Backend: scheduler (orders/1h, products/6h, customers/24h, reference/24h, transform/1h)
 - [x] **Modele RAW + CORE (star schema)** – tabele w DB gotowe
-- [ ] **Sync → RAW** – zmiana sync_service: zapisywać do raw_orders, raw_order_items, raw_products, raw_customers (zamiast orders/products/customers)
-- [ ] **ETL: transform service** – RAW → CORE (fact_orders, fact_order_items, dim_*)
-- [x] Skrypt seed_dim_date (do ręcznego uruchomienia)
-- [ ] Zadanie scheduler: transform_core, refresh_rfm, refresh_dim_date
+- [x] **Sync → RAW** – sync_service zapisuje do raw_orders, raw_order_items, raw_products, raw_customers + referencyjne (payments, shipments, categories, statuses, discounts)
+- [x] **ETL: transform service** – RAW → CORE (fact_orders, fact_order_items, dim_customers, dim_products, dim_categories)
+- [x] Skrypt seed_dim_date (auto-seed na starcie + do ręcznego uruchomienia)
+- [x] Zadanie scheduler: transform_core (1h), refresh_dim_date (auto-seed)
+- [x] **Data quality** – parsowanie dat Shoper, konwersja bool '0'/'1', status z raw_statuses, payment_date z status_date
+- [x] **Analytics API** – endpointy na CORE: /analytics/overview, /revenue, /top-products, /customers
 - [ ] Kalkulacje RFM / LTV (analytics)
 - [ ] Alembic migracje
 - [ ] **OAuth 2.0 + Partner API** – callback, przechowywanie tokenów per sklep (zob. docs/SHOPER_PANEL_APP.md)

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine, Base, async_session
-from .routers import dashboard, orders, products, customers, stores
+from .routers import dashboard, orders, products, customers, stores, analytics
 from .scheduler.jobs import setup_scheduler
 from .services.transform_service import TransformService
 
@@ -18,7 +18,9 @@ from .services.transform_service import TransformService
 from .models import (
     Store,
     RawOrder, RawOrderItem, RawProduct, RawCustomer,
-    RawPayment, RawShipping, RawCategory, RawDiscount,
+    RawPayment, RawShipping, RawCategory, RawDiscount, RawStatus,
+    RawProducer, RawTax, RawProductStock, RawParcel, RawUserGroup, RawCurrency,
+    RawGA4Traffic, RawGA4Source, RawGA4Page, RawGA4Geo, RawGA4Device,
     FactOrder, FactOrderItem,
     DimCustomer, DimProduct, DimCategory, DimDate,
 )
@@ -115,6 +117,7 @@ app.include_router(orders.router)
 app.include_router(products.router)
 app.include_router(customers.router)
 app.include_router(stores.router)
+app.include_router(analytics.router)
 
 
 @app.get("/api/health")

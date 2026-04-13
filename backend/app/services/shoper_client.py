@@ -17,11 +17,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PER_PAGE = 50
+DEFAULT_PER_PAGE = 100
 DEFAULT_TIMEOUT = 15.0
 MAX_RETRIES = 5
 RETRY_DELAY = 5.0
-RATE_DELAY = 0.2
+RATE_DELAY = 0.35
 
 
 class ShoperClient:
@@ -50,25 +50,27 @@ class ShoperClient:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def get(self, endpoint: str, params: dict | None = None) -> Any:
-        """Single GET with retry on 429 (rate limit)."""
+    async def get_raw(self, endpoint: str, params: dict | None = None) -> dict | list | None:
+        """Single GET returning full JSON response (with metadata like count/pages)."""
         client = await self._get_client()
         for attempt in range(1, MAX_RETRIES + 1):
             try:
+                await asyncio.sleep(RATE_DELAY)
                 r = await client.get(endpoint, params=params)
                 if r.status_code == 200:
-                    data = r.json()
-                    if isinstance(data, dict) and "list" in data:
-                        lst = data["list"]
-                        if isinstance(lst, dict):
-                            return list(lst.values())
-                        return lst
-                    return data
+                    return r.json()
                 if r.status_code == 429:
                     wait = int(r.headers.get("Retry-After", RETRY_DELAY))
                     logger.warning("Rate limited, waiting %ds (attempt %d)", wait, attempt)
                     await asyncio.sleep(wait)
                     continue
+                if (
+                    r.status_code == 400
+                    and endpoint == "/special-offers"
+                    and "Missing MODULE 'special-offers'" in r.text
+                ):
+                    logger.info("Skipping %s for this store (module not enabled)", endpoint)
+                    return []
                 logger.error("GET %s -> %d: %s", endpoint, r.status_code, r.text[:300])
                 return None
             except httpx.TimeoutException:
@@ -79,30 +81,62 @@ class ShoperClient:
                 await asyncio.sleep(RETRY_DELAY)
         return None
 
+    async def get(self, endpoint: str, params: dict | None = None) -> Any:
+        """Single GET with retry on 429 (rate limit). Returns extracted list/item."""
+        data = await self.get_raw(endpoint, params)
+        if data is None:
+            return None
+        if isinstance(data, dict) and "list" in data:
+            lst = data["list"]
+            if isinstance(lst, dict):
+                return list(lst.values())
+            return lst
+        return data
+
     async def get_all(
         self,
         endpoint: str,
         params: dict | None = None,
         per_page: int = DEFAULT_PER_PAGE,
     ) -> list[dict]:
-        """Paginated GET collecting all items across pages."""
+        """Paginated GET collecting all items across pages.
+
+        Uses the ``pages`` / ``count`` metadata returned by Shoper instead of
+        comparing list length to ``per_page`` (API may return fewer items than
+        requested per page).
+        """
         params = dict(params or {})
         all_items: list[dict] = []
         page = 1
+        total_pages: int | None = None
 
         while True:
             params["limit"] = per_page
             params["page"] = page
-            data = await self.get(endpoint, params)
-            if not data:
+            raw = await self.get_raw(endpoint, params)
+            if raw is None:
                 break
-            if isinstance(data, list):
-                all_items.extend(data)
-                if len(data) < per_page:
+
+            if isinstance(raw, dict) and "list" in raw:
+                lst = raw["list"]
+                if isinstance(lst, dict):
+                    items = list(lst.values())
+                elif isinstance(lst, list):
+                    items = lst
+                else:
+                    break
+                all_items.extend(items)
+                total_pages = int(raw.get("pages", 1))
+                if page >= total_pages:
+                    break
+            elif isinstance(raw, list):
+                all_items.extend(raw)
+                if len(raw) < per_page:
                     break
             else:
-                all_items.append(data)
+                all_items.append(raw)
                 break
+
             page += 1
             await asyncio.sleep(RATE_DELAY)
 

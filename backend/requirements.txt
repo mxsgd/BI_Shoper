@@ -8,3 +8,4 @@ httpx
 apscheduler
 pydantic-settings
 python-dotenv
+google-analytics-data
