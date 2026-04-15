@@ -1,8 +1,12 @@
 const BASE = "/api";
 const STORE_ID = 1;
 
-async function get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
-  const qs = new URLSearchParams({ store_id: String(STORE_ID), ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
+async function get<T>(path: string, params: Record<string, string | number | undefined | null> = {}): Promise<T> {
+  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    qs.set(k, String(v));
+  }
   const res = await fetch(`${BASE}${path}?${qs}`);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
@@ -10,6 +14,7 @@ async function get<T>(path: string, params: Record<string, string | number> = {}
 
 export interface OverviewData {
   period_days: number;
+  focus_date?: string | null;
   date_from: string;
   date_to: string;
   revenue: number;
@@ -35,6 +40,7 @@ export interface RevenuePoint {
 export interface RevenueData {
   period_days: number;
   group_by: string;
+  focus_date?: string | null;
   time_series: RevenuePoint[];
   by_status: { status: string; orders: number; revenue: number }[];
   by_channel: { channel: string; orders: number; revenue: number }[];
@@ -216,6 +222,7 @@ export interface TrafficDevice {
 
 export interface TrafficData {
   has_data: boolean;
+  focus_date?: string | null;
   overview: TrafficOverview | null;
   conversion: TrafficConversion | null;
   time_series: TrafficTimePoint[];
@@ -226,13 +233,16 @@ export interface TrafficData {
 }
 
 export const api = {
-  overview: (period = 30) => get<OverviewData>("/analytics/overview", { period }),
-  revenue: (period = 30, group_by = "day") => get<RevenueData>("/analytics/revenue", { period, group_by }),
+  overview: (period = 30, focusDate?: string) =>
+    get<OverviewData>("/analytics/overview", { period, focus_date: focusDate || undefined }),
+  revenue: (period = 30, group_by = "day", focusDate?: string) =>
+    get<RevenueData>("/analytics/revenue", { period, group_by, focus_date: focusDate || undefined }),
   topProducts: (period = 90, limit = 20) => get<TopProductsData>("/analytics/top-products", { period, limit }),
   customers: (period = 90) => get<CustomersData>("/analytics/customers", { period }),
   trends: (period = 365) => get<TrendsData>("/analytics/trends", { period }),
   cohorts: (months = 12) => get<CohortData>("/analytics/cohorts", { months }),
   rfm: () => get<RfmData>("/analytics/rfm"),
   channels: (period = 90, group_by = "month") => get<ChannelData>("/analytics/channels", { period, group_by }),
-  traffic: (period = 30) => get<TrafficData>("/analytics/traffic", { period }),
+  traffic: (period = 30, focusDate?: string) =>
+    get<TrafficData>("/analytics/traffic", { period, focus_date: focusDate || undefined }),
 };

@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
 import { api } from "../api";
 import type { RevenueData } from "../api";
+import { FocusBanner } from "../components/FocusBanner";
+import { LineHitDot } from "../components/ChartHitDot";
 
 const COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#e0e7ff", "#f59e0b", "#10b981", "#ef4444"];
 
@@ -13,20 +15,41 @@ export default function Orders() {
   const [period, setPeriod] = useState(30);
   const [groupBy, setGroupBy] = useState<"day" | "week" | "month">("day");
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const isFirstFetch = useRef(true);
+
+  const toggleDate = (d: string) => setSelectedDate((prev) => (prev === d ? null : d));
+  const clearSelection = () => setSelectedDate(null);
+
+  const focusForApi = groupBy === "day" ? selectedDate ?? undefined : undefined;
 
   useEffect(() => {
-    setLoading(true);
-    api.revenue(period, groupBy).then(setData).finally(() => setLoading(false));
-  }, [period, groupBy]);
+    if (isFirstFetch.current) setLoading(true);
+    api.revenue(period, groupBy, focusForApi)
+      .then(setData)
+      .finally(() => {
+        setLoading(false);
+        isFirstFetch.current = false;
+      });
+  }, [period, groupBy, focusForApi]);
 
-  if (loading) return <Loader />;
+  if (loading && !data) return <Loader />;
   if (!data) return <p>Brak danych</p>;
 
-  const totalOrders = data.time_series.reduce((s, p) => s + p.orders, 0);
-  const totalRevenue = data.time_series.reduce((s, p) => s + p.revenue, 0);
+  const row =
+    selectedDate && groupBy === "day"
+      ? data.time_series.find((p) => p.date === selectedDate)
+      : null;
+  const totalOrders = row ? row.orders : data.time_series.reduce((s, p) => s + p.orders, 0);
+  const totalRevenue = row ? row.revenue : data.time_series.reduce((s, p) => s + p.revenue, 0);
 
   return (
     <div>
+      <FocusBanner
+        selectedDate={selectedDate}
+        onClear={clearSelection}
+        subtitle="Szczegóły statusów dotyczą wybranej daty (tylko widok dzienny)."
+      />
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold">Zamówienia</h2>
         <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
@@ -38,7 +61,11 @@ export default function Orders() {
           ] as const).map((opt) => (
             <button
               key={opt.value}
-              onClick={() => { setPeriod(opt.value); setGroupBy(opt.group); }}
+              onClick={() => {
+                clearSelection();
+                setPeriod(opt.value);
+                setGroupBy(opt.group);
+              }}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
                 period === opt.value ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
               }`}
@@ -57,16 +84,40 @@ export default function Orders() {
       </div>
 
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Przychód i zamówienia w czasie</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-1">Przychód i zamówienia w czasie</h3>
+        <p className="text-xs text-slate-400 mb-3">
+          {groupBy === "day"
+            ? "Kliknij punkt, aby zawęzić szczegóły statusów do tego dnia."
+            : "Przełącz na widok dzienny (7D / 30D), aby wybierać konkretny dzień."}
+        </p>
         <ResponsiveContainer width="100%" height={350}>
-          <LineChart data={data.time_series}>
+          <LineChart data={data.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
             <YAxis yAxisId="rev" tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
             <YAxis yAxisId="ord" orientation="right" tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number, name: string) => name === "Przychód" ? `${v.toLocaleString("pl-PL")} zł` : v} />
-            <Line yAxisId="rev" type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2} dot={false} name="Przychód" />
-            <Line yAxisId="ord" type="monotone" dataKey="orders" stroke="#f59e0b" strokeWidth={2} dot={false} name="Zamówienia" />
+            <Tooltip formatter={(v, name) => (name === "Przychód" ? `${Number(v ?? 0).toLocaleString("pl-PL")} zł` : v)} />
+            <Line
+              yAxisId="rev"
+              type="monotone"
+              dataKey="revenue"
+              stroke="#6366f1"
+              strokeWidth={2}
+              name="Przychód"
+              dot={groupBy === "day" ? (props) => LineHitDot(props, selectedDate, toggleDate) : false}
+              activeDot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="ord"
+              type="monotone"
+              dataKey="orders"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              dot={false}
+              name="Zamówienia"
+              isAnimationActive={false}
+            />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -79,7 +130,7 @@ export default function Orders() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
               <YAxis type="category" dataKey="status" tick={{ fontSize: 11 }} width={120} tickFormatter={(v) => v || "—"} />
-              <Tooltip formatter={(v: number) => `${v.toLocaleString("pl-PL")} zł`} />
+              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
               <Bar dataKey="revenue" radius={[0, 4, 4, 0]} name="Przychód">
                 {data.by_status.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
               </Bar>

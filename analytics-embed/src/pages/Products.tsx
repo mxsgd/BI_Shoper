@@ -49,8 +49,10 @@ export default function Products() {
             <XAxis dataKey="idx" tick={{ fontSize: 11 }} label={{ value: "Produkt #", position: "insideBottom", offset: -2, fontSize: 11 }} />
             <YAxis yAxisId="rev" tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
             <YAxis yAxisId="pct" orientation="right" tick={{ fontSize: 11 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-            <Tooltip formatter={(v: number, name: string) =>
-              name === "Przychód" ? `${v.toLocaleString("pl-PL")} zł` : `${v.toFixed(1)}%`
+            <Tooltip formatter={(v, name) =>
+              name === "Przychód"
+                ? `${Number(v ?? 0).toLocaleString("pl-PL")} zł`
+                : `${Number(v ?? 0).toFixed(1)}%`
             } />
             <Legend />
             <Bar yAxisId="rev" dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Przychód" />

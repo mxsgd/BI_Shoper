@@ -75,7 +75,7 @@ export default function Retention() {
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis type="number" tick={{ fontSize: 11 }} />
             <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={110} />
-            <Tooltip formatter={(v: number) => v.toLocaleString("pl-PL")} />
+            <Tooltip formatter={(v) => Number(v ?? 0).toLocaleString("pl-PL")} />
             <Bar dataKey="count" name="Liczba klientów" radius={[0, 4, 4, 0]}>
               {rfmData.segments.map((seg) => (
                 <Cell key={seg.name} fill={SEGMENT_COLORS[seg.name] || "#94a3b8"} />

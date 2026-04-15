@@ -8,15 +8,42 @@ Query params: store_id (required), period (days, default 30),
 
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Literal
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+
+
+def _date_bucket_series_sql(group_by: Literal["day", "week", "month"]) -> str:
+    """SQL fragment: FROM ... AS b(bucket) producing one row per bucket in the period.
+
+    Use CAST(:x AS type), not :x::type — SQLAlchemy treats ':' as bind syntax and breaks on '::'.
+    """
+    if group_by == "day":
+        return (
+            "generate_series(CAST(:since AS date), CAST(:today AS date), interval '1 day') "
+            "AS b(bucket)"
+        )
+    if group_by == "week":
+        return (
+            "generate_series("
+            "date_trunc('week', CAST(:since AS timestamp))::date, "
+            "date_trunc('week', CAST(:today AS timestamp))::date, "
+            "interval '1 week'"
+            ") AS b(bucket)"
+        )
+    return (
+        "generate_series("
+        "date_trunc('month', CAST(:since AS date))::date, "
+        "date_trunc('month', CAST(:today AS date))::date, "
+        "interval '1 month'"
+        ") AS b(bucket)"
+    )
 
 
 def _period_bounds(period_days: int) -> tuple[date, date, date, date]:
@@ -36,13 +63,78 @@ def _period_bounds(period_days: int) -> tuple[date, date, date, date]:
 async def overview(
     store_id: int = Query(...),
     period: int = Query(30, ge=1, le=365),
+    focus_date: Optional[date] = Query(None, description="Single day; KPIs for this day vs previous day"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     KPI summary cards: revenue, order count, AOV, unique customers,
     avg items/order, paid %, with comparison to previous period.
+    With focus_date: metrics for that day only (delta vs previous calendar day).
     """
     cur_start, cur_end, prev_start, prev_end = _period_bounds(period)
+
+    def _delta(cur_val, prev_val):
+        if not prev_val:
+            return None
+        return round((float(cur_val) - float(prev_val)) / float(prev_val) * 100, 1)
+
+    if focus_date is not None:
+        if focus_date < cur_start or focus_date > cur_end:
+            raise HTTPException(status_code=400, detail="focus_date outside selected period")
+        prev_day = focus_date - timedelta(days=1)
+        sql = text("""
+            WITH cur AS (
+                SELECT
+                    COALESCE(SUM(gross_value), 0)   AS revenue,
+                    COUNT(*)                         AS orders,
+                    COUNT(DISTINCT customer_id)      AS customers,
+                    COALESCE(AVG(gross_value), 0)    AS aov,
+                    COALESCE(AVG(items_count), 0)    AS avg_items,
+                    COUNT(*) FILTER (WHERE payment_status = 'paid') AS paid_orders
+                FROM fact_orders
+                WHERE store_id = :store_id
+                  AND order_date::date = :focus_date
+            ),
+            prev AS (
+                SELECT
+                    COALESCE(SUM(gross_value), 0)   AS revenue,
+                    COUNT(*)                         AS orders,
+                    COUNT(DISTINCT customer_id)      AS customers,
+                    COALESCE(AVG(gross_value), 0)    AS aov
+                FROM fact_orders
+                WHERE store_id = :store_id
+                  AND order_date::date = :prev_day
+            )
+            SELECT
+                cur.revenue, cur.orders, cur.customers, cur.aov,
+                cur.avg_items, cur.paid_orders,
+                prev.revenue  AS prev_revenue,
+                prev.orders   AS prev_orders,
+                prev.customers AS prev_customers,
+                prev.aov      AS prev_aov
+            FROM cur, prev
+        """)
+        row = (await db.execute(sql, {
+            "store_id": store_id,
+            "focus_date": focus_date,
+            "prev_day": prev_day,
+        })).one()
+        return {
+            "period_days": period,
+            "focus_date": str(focus_date),
+            "date_from": str(focus_date),
+            "date_to": str(focus_date),
+            "revenue": round(float(row.revenue), 2),
+            "revenue_delta_pct": _delta(row.revenue, row.prev_revenue),
+            "orders": row.orders,
+            "orders_delta_pct": _delta(row.orders, row.prev_orders),
+            "aov": round(float(row.aov), 2),
+            "aov_delta_pct": _delta(row.aov, row.prev_aov),
+            "customers": row.customers,
+            "customers_delta_pct": _delta(row.customers, row.prev_customers),
+            "avg_items_per_order": round(float(row.avg_items), 1),
+            "paid_pct": round(row.paid_orders / row.orders * 100, 1) if row.orders else 0,
+        }
 
     sql = text("""
         WITH cur AS (
@@ -83,13 +175,9 @@ async def overview(
         "prev_start": prev_start, "prev_end": prev_end,
     })).one()
 
-    def _delta(cur_val, prev_val):
-        if not prev_val:
-            return None
-        return round((float(cur_val) - float(prev_val)) / float(prev_val) * 100, 1)
-
     return {
         "period_days": period,
+        "focus_date": None,
         "date_from": str(cur_start),
         "date_to": str(cur_end),
         "revenue": round(float(row.revenue), 2),
@@ -113,61 +201,97 @@ async def revenue(
     store_id: int = Query(...),
     period: int = Query(30, ge=1, le=365),
     group_by: Literal["day", "week", "month"] = Query("day"),
+    focus_date: Optional[date] = Query(None, description="Scope by_status/by_channel to this day"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Revenue time series + breakdown by status and channel.
+    With focus_date: status/channel tables are for that day only (time_series unchanged).
     """
     cur_start = date.today() - timedelta(days=period - 1)
+    today = date.today()
+    if focus_date is not None and (focus_date < cur_start or focus_date > today):
+        raise HTTPException(status_code=400, detail="focus_date outside selected period")
 
     trunc_map = {"day": "day", "week": "week", "month": "month"}
     trunc = trunc_map[group_by]
+    bucket_from = _date_bucket_series_sql(group_by)
 
-    # Time series
+    # Time series — full calendar buckets (zeros where no orders)
     ts_sql = text(f"""
         SELECT
-            date_trunc(:trunc, order_date)::date AS bucket,
-            COUNT(*)                              AS orders,
-            COALESCE(SUM(gross_value), 0)         AS revenue,
-            COALESCE(SUM(discount_value), 0)      AS discounts,
-            COALESCE(SUM(shipping_value), 0)      AS shipping
-        FROM fact_orders
-        WHERE store_id = :store_id
-          AND order_date::date >= :since
-        GROUP BY bucket
-        ORDER BY bucket
+            b.bucket::date AS bucket,
+            COALESCE(agg.orders, 0)              AS orders,
+            COALESCE(agg.revenue, 0)             AS revenue,
+            COALESCE(agg.discounts, 0)           AS discounts,
+            COALESCE(agg.shipping, 0)            AS shipping
+        FROM {bucket_from}
+        LEFT JOIN (
+            SELECT
+                date_trunc(:trunc, order_date)::date AS bucket,
+                COUNT(*)                              AS orders,
+                COALESCE(SUM(gross_value), 0)         AS revenue,
+                COALESCE(SUM(discount_value), 0)      AS discounts,
+                COALESCE(SUM(shipping_value), 0)      AS shipping
+            FROM fact_orders
+            WHERE store_id = :store_id
+              AND order_date::date >= :since
+            GROUP BY bucket
+        ) agg ON agg.bucket = b.bucket::date
+        ORDER BY b.bucket
     """)
     ts_rows = (await db.execute(ts_sql, {
-        "store_id": store_id, "since": cur_start, "trunc": trunc,
+        "store_id": store_id, "since": cur_start, "today": today, "trunc": trunc,
     })).all()
 
-    # By status
-    status_sql = text("""
-        SELECT order_status, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-        FROM fact_orders
-        WHERE store_id = :store_id AND order_date::date >= :since
-        GROUP BY order_status
-        ORDER BY revenue DESC
-    """)
-    status_rows = (await db.execute(status_sql, {
-        "store_id": store_id, "since": cur_start,
-    })).all()
-
-    # By channel
-    channel_sql = text("""
-        SELECT source_channel, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-        FROM fact_orders
-        WHERE store_id = :store_id AND order_date::date >= :since
-        GROUP BY source_channel
-        ORDER BY revenue DESC
-    """)
-    channel_rows = (await db.execute(channel_sql, {
-        "store_id": store_id, "since": cur_start,
-    })).all()
+    # By status / channel — whole period, or single day when focus_date set
+    if focus_date is not None:
+        status_sql = text("""
+            SELECT order_status, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date = :focus_date
+            GROUP BY order_status
+            ORDER BY revenue DESC
+        """)
+        status_rows = (await db.execute(status_sql, {
+            "store_id": store_id, "focus_date": focus_date,
+        })).all()
+        channel_sql = text("""
+            SELECT source_channel, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date = :focus_date
+            GROUP BY source_channel
+            ORDER BY revenue DESC
+        """)
+        channel_rows = (await db.execute(channel_sql, {
+            "store_id": store_id, "focus_date": focus_date,
+        })).all()
+    else:
+        status_sql = text("""
+            SELECT order_status, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date >= :since
+            GROUP BY order_status
+            ORDER BY revenue DESC
+        """)
+        status_rows = (await db.execute(status_sql, {
+            "store_id": store_id, "since": cur_start,
+        })).all()
+        channel_sql = text("""
+            SELECT source_channel, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date >= :since
+            GROUP BY source_channel
+            ORDER BY revenue DESC
+        """)
+        channel_rows = (await db.execute(channel_sql, {
+            "store_id": store_id, "since": cur_start,
+        })).all()
 
     return {
         "period_days": period,
         "group_by": group_by,
+        "focus_date": str(focus_date) if focus_date else None,
         "time_series": [
             {
                 "date": str(r.bucket),
@@ -280,6 +404,7 @@ async def customers_analytics(
     Customer analytics: new vs returning, top by revenue, cohort overview.
     """
     since = date.today() - timedelta(days=period - 1)
+    today = date.today()
 
     # Segmentation
     seg_sql = text("""
@@ -311,20 +436,30 @@ async def customers_analytics(
     """)
     top_rows = (await db.execute(top_sql, {"store_id": store_id})).all()
 
-    # New customers per month (from fact_orders, first-time buyers in period)
+    # New customers per month — full month range (zeros where none)
     new_sql = text("""
         SELECT
-            date_trunc('month', first_order_date)::date AS month,
-            COUNT(*) AS new_customers
-        FROM dim_customers
-        WHERE store_id = :store_id
-          AND first_order_date IS NOT NULL
-          AND first_order_date::date >= :since
-        GROUP BY month
-        ORDER BY month
+            d.month::date AS month,
+            COALESCE(agg.new_customers, 0) AS new_customers
+        FROM generate_series(
+            date_trunc('month', CAST(:since AS date))::date,
+            date_trunc('month', CAST(:today AS date))::date,
+            interval '1 month'
+        ) AS d(month)
+        LEFT JOIN (
+            SELECT
+                date_trunc('month', first_order_date)::date AS month,
+                COUNT(*) AS new_customers
+            FROM dim_customers
+            WHERE store_id = :store_id
+              AND first_order_date IS NOT NULL
+              AND first_order_date::date >= :since
+            GROUP BY month
+        ) agg ON agg.month = d.month::date
+        ORDER BY d.month
     """)
     new_rows = (await db.execute(new_sql, {
-        "store_id": store_id, "since": since,
+        "store_id": store_id, "since": since, "today": today,
     })).all()
 
     # Repeat rate
@@ -401,7 +536,7 @@ async def trends(
             AVG(COALESCE(agg.revenue, 0)) OVER (
                 ORDER BY d.date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
             ) AS ma30
-        FROM generate_series(:since::date, :today::date, '1 day') AS d(date)
+        FROM generate_series(CAST(:since AS date), CAST(:today AS date), interval '1 day') AS d(date)
         LEFT JOIN (
             SELECT order_date::date AS odate,
                    SUM(gross_value) AS revenue,
@@ -653,20 +788,31 @@ async def channels(
     Channel breakdown over time with summary.
     """
     since = date.today() - timedelta(days=period - 1)
+    today = date.today()
+    bucket_from = _date_bucket_series_sql(group_by)
 
-    ts_sql = text("""
+    ts_sql = text(f"""
+        WITH buckets AS (SELECT bucket::date AS bucket FROM {bucket_from})
         SELECT
-            date_trunc(:trunc, order_date)::date AS bucket,
-            source_channel,
-            COUNT(*)                AS orders,
-            COALESCE(SUM(gross_value), 0) AS revenue
-        FROM fact_orders
-        WHERE store_id = :store_id AND order_date::date >= :since
-        GROUP BY bucket, source_channel
-        ORDER BY bucket
+            bu.bucket,
+            agg.source_channel,
+            COALESCE(agg.orders, 0) AS orders,
+            COALESCE(agg.revenue, 0) AS revenue
+        FROM buckets bu
+        LEFT JOIN (
+            SELECT
+                date_trunc(:trunc, order_date)::date AS bucket,
+                source_channel,
+                COUNT(*) AS orders,
+                COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date >= :since
+            GROUP BY bucket, source_channel
+        ) agg ON agg.bucket = bu.bucket
+        ORDER BY bu.bucket, agg.source_channel NULLS LAST
     """)
     ts_rows = (await db.execute(ts_sql, {
-        "store_id": store_id, "since": since, "trunc": group_by,
+        "store_id": store_id, "since": since, "today": today, "trunc": group_by,
     })).all()
 
     time_map: dict[str, dict] = {}
@@ -674,8 +820,9 @@ async def channels(
         key = str(r.bucket)
         if key not in time_map:
             time_map[key] = {"date": key}
-        ch = r.source_channel or "other"
-        time_map[key][ch] = round(float(r.revenue), 2)
+        if r.source_channel is not None:
+            ch = r.source_channel or "other"
+            time_map[key][ch] = round(float(r.revenue), 2)
 
     summary_sql = text("""
         SELECT
@@ -694,10 +841,18 @@ async def channels(
 
     grand_total = sum(float(r.total_revenue) for r in summary_rows) or 1
 
+    channel_names = [r.source_channel or "other" for r in summary_rows]
+    time_series = []
+    for key in sorted(time_map):
+        row = dict(time_map[key])
+        for ch in channel_names:
+            row.setdefault(ch, 0)
+        time_series.append(row)
+
     return {
         "period_days": period,
-        "time_series": list(time_map.values()),
-        "channels": [r.source_channel or "other" for r in summary_rows],
+        "time_series": time_series,
+        "channels": channel_names,
         "summary": [
             {
                 "channel": r.source_channel or "other",
@@ -718,13 +873,18 @@ async def channels(
 async def traffic(
     store_id: int = Query(...),
     period: int = Query(30, ge=1, le=365),
+    focus_date: Optional[date] = Query(None, description="KPIs/tables for this day only; time_series unchanged"),
     db: AsyncSession = Depends(get_db),
 ):
     """
     GA4 traffic overview joined with Shoper orders for conversion analysis.
     Returns empty structures gracefully if GA4 tables have no data.
+    With focus_date: overview, conversion, sources, pages, geo, devices scoped to that day.
     """
     since = date.today() - timedelta(days=period - 1)
+    today = date.today()
+    if focus_date is not None and (focus_date < since or focus_date > today):
+        raise HTTPException(status_code=400, detail="focus_date outside selected period")
 
     has_ga4 = (await db.execute(text(
         "SELECT EXISTS (SELECT 1 FROM raw_ga4_traffic WHERE date >= :since)"
@@ -735,86 +895,146 @@ async def traffic(
             "has_data": False,
             "overview": None, "conversion": None, "time_series": [],
             "sources": [], "top_pages": [], "geo": [], "devices": [],
+            "focus_date": None,
         }
 
-    overview_sql = text("""
-        SELECT
-            COALESCE(SUM(sessions), 0)         AS sessions,
-            COALESCE(SUM(total_users), 0)      AS users,
-            COALESCE(SUM(new_users), 0)        AS new_users,
-            ROUND(AVG(bounce_rate)::numeric, 4) AS bounce_rate,
-            ROUND(AVG(avg_session_duration)::numeric, 1) AS avg_duration
-        FROM raw_ga4_traffic
-        WHERE date >= :since
-    """)
-    ov = (await db.execute(overview_sql, {"since": since})).one()
-
-    orders_sql = text("""
-        SELECT COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-        FROM fact_orders
-        WHERE store_id = :store_id AND order_date::date >= :since
-    """)
-    ord_row = (await db.execute(orders_sql, {"store_id": store_id, "since": since})).one()
+    if focus_date is not None:
+        overview_sql = text("""
+            SELECT
+                COALESCE(SUM(sessions), 0)         AS sessions,
+                COALESCE(SUM(total_users), 0)      AS users,
+                COALESCE(SUM(new_users), 0)        AS new_users,
+                ROUND(AVG(bounce_rate)::numeric, 4) AS bounce_rate,
+                ROUND(AVG(avg_session_duration)::numeric, 1) AS avg_duration
+            FROM raw_ga4_traffic
+            WHERE date = :focus_date
+        """)
+        ov = (await db.execute(overview_sql, {"focus_date": focus_date})).one()
+        orders_sql = text("""
+            SELECT COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date = :focus_date
+        """)
+        ord_row = (await db.execute(orders_sql, {"store_id": store_id, "focus_date": focus_date})).one()
+    else:
+        overview_sql = text("""
+            SELECT
+                COALESCE(SUM(sessions), 0)         AS sessions,
+                COALESCE(SUM(total_users), 0)      AS users,
+                COALESCE(SUM(new_users), 0)        AS new_users,
+                ROUND(AVG(bounce_rate)::numeric, 4) AS bounce_rate,
+                ROUND(AVG(avg_session_duration)::numeric, 1) AS avg_duration
+            FROM raw_ga4_traffic
+            WHERE date >= :since
+        """)
+        ov = (await db.execute(overview_sql, {"since": since})).one()
+        orders_sql = text("""
+            SELECT COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
+            FROM fact_orders
+            WHERE store_id = :store_id AND order_date::date >= :since
+        """)
+        ord_row = (await db.execute(orders_sql, {"store_id": store_id, "since": since})).one()
 
     ts_sql = text("""
         SELECT
-            t.date,
-            t.sessions, t.total_users AS users,
+            d.date::date AS date,
+            COALESCE(t.sessions, 0) AS sessions,
+            COALESCE(t.total_users, 0) AS users,
             COALESCE(o.orders, 0) AS orders,
             COALESCE(o.revenue, 0) AS revenue
-        FROM raw_ga4_traffic t
+        FROM generate_series(CAST(:since AS date), CAST(:today AS date), interval '1 day') AS d(date)
+        LEFT JOIN raw_ga4_traffic t ON t.date = d.date::date
         LEFT JOIN (
             SELECT order_date::date AS odate, COUNT(*) AS orders, SUM(gross_value) AS revenue
             FROM fact_orders WHERE store_id = :store_id AND order_date::date >= :since
             GROUP BY order_date::date
-        ) o ON o.odate = t.date
-        WHERE t.date >= :since
-        ORDER BY t.date
+        ) o ON o.odate = d.date::date
+        ORDER BY d.date
     """)
-    ts_rows = (await db.execute(ts_sql, {"store_id": store_id, "since": since})).all()
+    ts_rows = (await db.execute(ts_sql, {
+        "store_id": store_id, "since": since, "today": today,
+    })).all()
 
-    sources_sql = text("""
-        SELECT source, medium,
-            SUM(sessions) AS sessions, SUM(users) AS users,
-            SUM(new_users) AS new_users, SUM(engaged_sessions) AS engaged,
-            SUM(conversions) AS conversions
-        FROM raw_ga4_sources WHERE date >= :since
-        GROUP BY source, medium
-        ORDER BY sessions DESC
-        LIMIT 30
-    """)
-    src_rows = (await db.execute(sources_sql, {"since": since})).all()
-
-    pages_sql = text("""
-        SELECT page_path,
-            SUM(page_views) AS views,
-            ROUND(AVG(avg_time_on_page)::numeric, 1) AS avg_time,
-            SUM(entrances) AS entrances
-        FROM raw_ga4_pages WHERE date >= :since
-        GROUP BY page_path
-        ORDER BY views DESC
-        LIMIT 20
-    """)
-    page_rows = (await db.execute(pages_sql, {"since": since})).all()
-
-    geo_sql = text("""
-        SELECT country, city,
-            SUM(sessions) AS sessions, SUM(users) AS users
-        FROM raw_ga4_geo WHERE date >= :since
-        GROUP BY country, city
-        ORDER BY sessions DESC
-        LIMIT 30
-    """)
-    geo_rows = (await db.execute(geo_sql, {"since": since})).all()
-
-    devices_sql = text("""
-        SELECT device_category,
-            SUM(sessions) AS sessions, SUM(users) AS users
-        FROM raw_ga4_devices WHERE date >= :since
-        GROUP BY device_category
-        ORDER BY sessions DESC
-    """)
-    dev_rows = (await db.execute(devices_sql, {"since": since})).all()
+    if focus_date is not None:
+        sources_sql = text("""
+            SELECT source, medium,
+                SUM(sessions) AS sessions, SUM(users) AS users,
+                SUM(new_users) AS new_users, SUM(engaged_sessions) AS engaged,
+                SUM(conversions) AS conversions
+            FROM raw_ga4_sources WHERE date = :focus_date
+            GROUP BY source, medium
+            ORDER BY sessions DESC
+            LIMIT 30
+        """)
+        src_rows = (await db.execute(sources_sql, {"focus_date": focus_date})).all()
+        pages_sql = text("""
+            SELECT page_path,
+                SUM(page_views) AS views,
+                ROUND(AVG(avg_time_on_page)::numeric, 1) AS avg_time,
+                SUM(entrances) AS entrances
+            FROM raw_ga4_pages WHERE date = :focus_date
+            GROUP BY page_path
+            ORDER BY views DESC
+            LIMIT 20
+        """)
+        page_rows = (await db.execute(pages_sql, {"focus_date": focus_date})).all()
+        geo_sql = text("""
+            SELECT country, city,
+                SUM(sessions) AS sessions, SUM(users) AS users
+            FROM raw_ga4_geo WHERE date = :focus_date
+            GROUP BY country, city
+            ORDER BY sessions DESC
+            LIMIT 30
+        """)
+        geo_rows = (await db.execute(geo_sql, {"focus_date": focus_date})).all()
+        devices_sql = text("""
+            SELECT device_category,
+                SUM(sessions) AS sessions, SUM(users) AS users
+            FROM raw_ga4_devices WHERE date = :focus_date
+            GROUP BY device_category
+            ORDER BY sessions DESC
+        """)
+        dev_rows = (await db.execute(devices_sql, {"focus_date": focus_date})).all()
+    else:
+        sources_sql = text("""
+            SELECT source, medium,
+                SUM(sessions) AS sessions, SUM(users) AS users,
+                SUM(new_users) AS new_users, SUM(engaged_sessions) AS engaged,
+                SUM(conversions) AS conversions
+            FROM raw_ga4_sources WHERE date >= :since
+            GROUP BY source, medium
+            ORDER BY sessions DESC
+            LIMIT 30
+        """)
+        src_rows = (await db.execute(sources_sql, {"since": since})).all()
+        pages_sql = text("""
+            SELECT page_path,
+                SUM(page_views) AS views,
+                ROUND(AVG(avg_time_on_page)::numeric, 1) AS avg_time,
+                SUM(entrances) AS entrances
+            FROM raw_ga4_pages WHERE date >= :since
+            GROUP BY page_path
+            ORDER BY views DESC
+            LIMIT 20
+        """)
+        page_rows = (await db.execute(pages_sql, {"since": since})).all()
+        geo_sql = text("""
+            SELECT country, city,
+                SUM(sessions) AS sessions, SUM(users) AS users
+            FROM raw_ga4_geo WHERE date >= :since
+            GROUP BY country, city
+            ORDER BY sessions DESC
+            LIMIT 30
+        """)
+        geo_rows = (await db.execute(geo_sql, {"since": since})).all()
+        devices_sql = text("""
+            SELECT device_category,
+                SUM(sessions) AS sessions, SUM(users) AS users
+            FROM raw_ga4_devices WHERE date >= :since
+            GROUP BY device_category
+            ORDER BY sessions DESC
+        """)
+        dev_rows = (await db.execute(devices_sql, {"since": since})).all()
     dev_total = sum(r.sessions for r in dev_rows) or 1
 
     sessions_total = int(ov.sessions)
@@ -822,6 +1042,7 @@ async def traffic(
 
     return {
         "has_data": True,
+        "focus_date": str(focus_date) if focus_date else None,
         "overview": {
             "sessions": sessions_total,
             "users": int(ov.users),

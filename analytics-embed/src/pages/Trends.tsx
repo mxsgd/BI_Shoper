@@ -1,16 +1,22 @@
 import { useEffect, useState } from "react";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, Line, ComposedChart,
 } from "recharts";
 import { api } from "../api";
 import type { TrendsData } from "../api";
+import { FocusBanner } from "../components/FocusBanner";
+import { LineHitDot } from "../components/ChartHitDot";
 
 const WEEKDAYS = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Ndz"];
 
 export default function Trends() {
   const [data, setData] = useState<TrendsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  const toggleDate = (d: string) => setSelectedDate((prev) => (prev === d ? null : d));
+  const clearSelection = () => setSelectedDate(null);
 
   useEffect(() => {
     setLoading(true);
@@ -20,13 +26,21 @@ export default function Trends() {
   if (loading) return <Loader />;
   if (!data) return <p>Brak danych</p>;
 
+  const selDay = selectedDate ? data.daily.find((d) => d.date === selectedDate) : undefined;
+
   const lastMonth = data.monthly[data.monthly.length - 1];
   const prevMonth = data.monthly.length > 1 ? data.monthly[data.monthly.length - 2] : null;
 
   return (
     <div>
       <h2 className="text-2xl font-bold mb-1">Trendy sprzedaży</h2>
-      <p className="text-sm text-slate-500 mb-6">Analiza trendów, średnie kroczące i porównania okresowe</p>
+      <p className="text-sm text-slate-500 mb-4">Analiza trendów, średnie kroczące i porównania okresowe</p>
+
+      <FocusBanner
+        selectedDate={selectedDate}
+        onClear={clearSelection}
+        subtitle="Wyróżnienie na wykresie — karty u góry nadal za cały okres API (365 dni)."
+      />
 
       {/* MoM Growth Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -58,23 +72,50 @@ export default function Trends() {
 
       {/* Revenue with Moving Averages */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Przychód dzienny + średnie kroczące</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-1">Przychód dzienny + średnie kroczące</h3>
+        <p className="text-xs text-slate-400 mb-3">Kliknij dzień, aby go wyróżnić (porównanie z resztą serii).</p>
+        {selDay ? (
+          <p className="text-sm text-indigo-800 mb-3">
+            <strong className="tabular-nums">{selDay.date}</strong>
+            {" · "}
+            {selDay.revenue.toLocaleString("pl-PL")} zł, {selDay.orders} zamówień
+          </p>
+        ) : null}
         <ResponsiveContainer width="100%" height={350}>
-          <ComposedChart data={data.daily}>
-            <defs>
-              <linearGradient id="colorRevTrend" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#6366f1" stopOpacity={0.15} />
-                <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-              </linearGradient>
-            </defs>
+          <ComposedChart data={data.daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v) => v.slice(5)} interval="preserveStartEnd" />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-            <Tooltip formatter={(v: number) => `${v.toLocaleString("pl-PL")} zł`} />
+            <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
             <Legend />
-            <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#colorRevTrend)" strokeWidth={1} name="Przychód" />
-            <Line type="monotone" dataKey="ma7" stroke="#f59e0b" strokeWidth={2} dot={false} name="MA7" />
-            <Line type="monotone" dataKey="ma30" stroke="#ef4444" strokeWidth={2} dot={false} name="MA30" />
+            <Line
+              type="monotone"
+              dataKey="revenue"
+              stroke="#6366f1"
+              strokeWidth={2}
+              name="Przychód"
+              dot={(props) => LineHitDot(props, selectedDate, toggleDate)}
+              activeDot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="ma7"
+              stroke="#f59e0b"
+              strokeWidth={2}
+              dot={false}
+              name="MA7"
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="ma30"
+              stroke="#ef4444"
+              strokeWidth={2}
+              dot={false}
+              name="MA30"
+              isAnimationActive={false}
+            />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -121,7 +162,7 @@ export default function Trends() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="name" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: number) => `${v.toLocaleString("pl-PL")} zł`} />
+              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
               <Bar dataKey="avg_revenue" fill="#8b5cf6" radius={[4, 4, 0, 0]} name="Śr. przychód" />
             </BarChart>
           </ResponsiveContainer>

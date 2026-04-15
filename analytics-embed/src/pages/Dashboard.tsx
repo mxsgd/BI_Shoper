@@ -1,23 +1,27 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Legend,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, Cell,
 } from "recharts";
 import { api } from "../api";
 import type { OverviewData, RevenueData, TrafficData } from "../api";
+import { FocusBanner } from "../components/FocusBanner";
+import { LineHitDot } from "../components/ChartHitDot";
 
-function KpiCard({ title, value, delta, prefix = "", suffix = "" }: {
+function KpiCard({ title, value, delta, prefix = "", suffix = "", deltaHint }: {
   title: string; value: string | number; delta: number | null; prefix?: string; suffix?: string;
+  deltaHint?: string;
 }) {
   const color = delta === null ? "text-slate-400" : delta >= 0 ? "text-emerald-600" : "text-red-500";
   const arrow = delta === null ? "" : delta >= 0 ? "\u2191" : "\u2193";
+  const deltaLabel = deltaHint ?? "vs poprzedni okres";
   return (
     <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
       <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">{title}</p>
       <p className="text-2xl font-bold mt-1">{prefix}{typeof value === "number" ? value.toLocaleString("pl-PL") : value}{suffix}</p>
       {delta !== null && (
         <p className={`text-sm mt-1 font-medium ${color}`}>
-          {arrow} {Math.abs(delta)}% vs poprzedni okres
+          {arrow} {Math.abs(delta)}% {deltaLabel}
         </p>
       )}
     </div>
@@ -30,15 +34,37 @@ export default function Dashboard() {
   const [trafficData, setTrafficData] = useState<TrafficData | null>(null);
   const [period, setPeriod] = useState(30);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const isFirstFetch = useRef(true);
+
+  const toggleDate = (d: string) => setSelectedDate((prev) => (prev === d ? null : d));
+  const clearSelection = () => setSelectedDate(null);
+
+  const setPeriodAndClear = (p: number) => {
+    clearSelection();
+    setPeriod(p);
+  };
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([api.overview(period), api.revenue(period), api.traffic(period)])
-      .then(([o, r, t]) => { setOverview(o); setRevenue(r); setTrafficData(t); })
-      .finally(() => setLoading(false));
-  }, [period]);
+    const fd = selectedDate ?? undefined;
+    if (isFirstFetch.current) setLoading(true);
+    Promise.all([
+      api.overview(period, fd),
+      api.revenue(period, "day", fd),
+      api.traffic(period, fd),
+    ])
+      .then(([o, r, t]) => {
+        setOverview(o);
+        setRevenue(r);
+        setTrafficData(t);
+      })
+      .finally(() => {
+        setLoading(false);
+        isFirstFetch.current = false;
+      });
+  }, [period, selectedDate]);
 
-  if (loading) return <Loader />;
+  if (loading && !revenue) return <Loader />;
   if (!overview || !revenue) return <p>Brak danych</p>;
 
   return (
@@ -46,47 +72,78 @@ export default function Dashboard() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Dashboard</h2>
-          <p className="text-sm text-slate-500">{overview.date_from} — {overview.date_to}</p>
+          <p className="text-sm text-slate-500">
+            {overview.date_from} — {overview.date_to}
+            {selectedDate ? (
+              <span className="ml-2 text-indigo-600 font-medium">· KPI i tabele: wybrany dzień</span>
+            ) : null}
+          </p>
         </div>
-        <PeriodSelector value={period} onChange={setPeriod} />
+        <PeriodSelector value={period} onChange={setPeriodAndClear} />
       </div>
 
+      <FocusBanner
+        selectedDate={selectedDate}
+        onClear={clearSelection}
+        subtitle="KPI, tabele statusów/kanałów i metryki GA4 dotyczą wybranej daty."
+      />
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiCard title="Przychód" value={overview.revenue} delta={overview.revenue_delta_pct} suffix=" zł" />
-        <KpiCard title="Zamówienia" value={overview.orders} delta={overview.orders_delta_pct} />
-        <KpiCard title="Śr. wartość (AOV)" value={overview.aov} delta={overview.aov_delta_pct} suffix=" zł" />
-        <KpiCard title="Klienci" value={overview.customers} delta={overview.customers_delta_pct} />
+        <KpiCard title="Przychód" value={overview.revenue} delta={overview.revenue_delta_pct} suffix=" zł" deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
+        <KpiCard title="Zamówienia" value={overview.orders} delta={overview.orders_delta_pct} deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
+        <KpiCard title="Śr. wartość (AOV)" value={overview.aov} delta={overview.aov_delta_pct} suffix=" zł" deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
+        <KpiCard title="Klienci" value={overview.customers} delta={overview.customers_delta_pct} deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Przychód w czasie</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-1">Przychód w czasie</h3>
+          <p className="text-xs text-slate-400 mb-3">Kliknij linię przychodu lub słupek zamówień, aby zawęzić tabele poniżej (bez przeładowania wykresu).</p>
           <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={revenue.time_series}>
-              <defs>
-                <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                </linearGradient>
-              </defs>
+            <LineChart data={revenue.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: number) => `${v.toLocaleString("pl-PL")} zł`} />
-              <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#colorRev)" strokeWidth={2} name="Przychód" />
-            </AreaChart>
+              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
+              <Line
+                type="monotone"
+                dataKey="revenue"
+                stroke="#6366f1"
+                strokeWidth={2}
+                name="Przychód"
+                dot={(props) => LineHitDot(props, selectedDate, toggleDate)}
+                activeDot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
           </ResponsiveContainer>
         </div>
 
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
           <h3 className="text-sm font-semibold text-slate-700 mb-4">Zamówienia / dzień</h3>
           <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={revenue.time_series}>
+            <BarChart data={revenue.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip />
-              <Bar dataKey="orders" fill="#8b5cf6" radius={[4, 4, 0, 0]} name="Zamówienia" />
+              <Bar
+                dataKey="orders"
+                radius={[4, 4, 0, 0]}
+                name="Zamówienia"
+                onClick={(item: { payload?: { date?: string } }) => {
+                  const dt = item?.payload?.date;
+                  if (typeof dt === "string") toggleDate(dt);
+                }}
+              >
+                {revenue.time_series.map((entry) => (
+                  <Cell
+                    key={entry.date}
+                    fill={selectedDate === entry.date ? "#4f46e5" : "#8b5cf6"}
+                    style={{ cursor: "pointer" }}
+                  />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -117,7 +174,7 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                 <YAxis type="category" dataKey="channel" tick={{ fontSize: 11 }} width={70} />
-                <Tooltip formatter={(v: number) => `${v.toLocaleString("pl-PL")} zł`} />
+                <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
                 <Bar dataKey="revenue" fill="#8b5cf6" radius={[0, 4, 4, 0]} name="Przychód" />
               </BarChart>
             </ResponsiveContainer>

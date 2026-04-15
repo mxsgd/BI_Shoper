@@ -20,27 +20,47 @@ def _get_ga4_client():
     """Lazy import so the app starts even without the google package installed."""
     from google.analytics.data_v1beta import BetaAnalyticsDataClient
     from google.analytics.data_v1beta.types import (
-        RunReportRequest, DateRange, Dimension, Metric,
+        RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter,
     )
 
     settings = get_settings()
     if not settings.ga4_property_id or not settings.ga4_credentials_path:
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
     client = BetaAnalyticsDataClient.from_service_account_json(
         settings.ga4_credentials_path
     )
     property_id = f"properties/{settings.ga4_property_id}"
-    return client, property_id, RunReportRequest, DateRange, Dimension, Metric
+    return client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter
+
+
+_STORE_PAGE_FILTER = None
+
+def _get_store_filter(FilterExpression, Filter):
+    """Only count sessions that visited /pl/ pages (exclude BI dashboard, old URLs)."""
+    global _STORE_PAGE_FILTER
+    if _STORE_PAGE_FILTER is None:
+        _STORE_PAGE_FILTER = FilterExpression(
+            filter=Filter(
+                field_name="pagePath",
+                string_filter=Filter.StringFilter(
+                    match_type=Filter.StringFilter.MatchType.BEGINS_WITH,
+                    value="/pl/",
+                ),
+            )
+        )
+    return _STORE_PAGE_FILTER
 
 
 def _run_report(client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+                FilterExpression, Filter,
                 date_str: str, dimensions: list[str], metrics: list[str]):
     request = RunReportRequest(
         property=property_id,
         date_ranges=[DateRange(start_date=date_str, end_date=date_str)],
         dimensions=[Dimension(name=d) for d in dimensions],
         metrics=[Metric(name=m) for m in metrics],
+        dimension_filter=_get_store_filter(FilterExpression, Filter),
         limit=10000,
     )
     return client.run_report(request)
@@ -68,30 +88,16 @@ class GA4SyncService:
             logger.warning("GA4 not configured (GA4_PROPERTY_ID / GA4_CREDENTIALS_PATH missing)")
             return {"ok": False, "reason": "ga4_not_configured"}
 
-        client, property_id, RunReportRequest, DateRange, Dimension, Metric = parts
+        client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter = parts
         date_str = target_date.isoformat()
         counts = {}
 
-        counts["traffic"] = await self._sync_traffic(
-            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str, target_date
-        )
-        counts["sources"] = await self._sync_sources(
-            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str, target_date
-        )
-        counts["pages"] = await self._sync_pages(
-            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str, target_date
-        )
-        counts["geo"] = await self._sync_geo(
-            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str, target_date
-        )
-        counts["devices"] = await self._sync_devices(
-            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str, target_date
-        )
+        api = (client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter)
+        counts["traffic"] = await self._sync_traffic(*api, date_str, target_date)
+        counts["sources"] = await self._sync_sources(*api, date_str, target_date)
+        counts["pages"] = await self._sync_pages(*api, date_str, target_date)
+        counts["geo"] = await self._sync_geo(*api, date_str, target_date)
+        counts["devices"] = await self._sync_devices(*api, date_str, target_date)
 
         logger.info("GA4 sync for %s: %s", date_str, counts)
         return {"ok": True, "date": date_str, **counts}
@@ -110,9 +116,10 @@ class GA4SyncService:
         return {"ok": True, "days_synced": len(results)}
 
     async def _sync_traffic(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-                            date_str, target_date):
+                            FilterExpression, Filter, date_str, target_date):
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+            FilterExpression, Filter,
             date_str, dimensions=[], metrics=[
                 "sessions", "totalUsers", "newUsers", "screenPageViews",
                 "bounceRate", "averageSessionDuration", "engagedSessions", "eventCount",
@@ -143,19 +150,19 @@ class GA4SyncService:
         return 1
 
     async def _sync_sources(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-                            date_str, target_date):
+                            FilterExpression, Filter, date_str, target_date):
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str,
+            FilterExpression, Filter, date_str,
             dimensions=["sessionSource", "sessionMedium", "sessionCampaignName"],
             metrics=["sessions", "totalUsers", "newUsers", "engagedSessions", "conversions"],
         )
         count = 0
         sql = text("""
             INSERT INTO raw_ga4_sources (date, source, medium, campaign,
-                sessions, users, new_users, engaged_sessions, conversions)
+                sessions, users, new_users, engaged_sessions, conversions, revenue)
             VALUES (:date, :source, :medium, :campaign,
-                :sessions, :users, :new_users, :engaged_sessions, :conversions)
+                :sessions, :users, :new_users, :engaged_sessions, :conversions, 0)
             ON CONFLICT (date, source, medium) DO UPDATE SET
                 campaign = EXCLUDED.campaign,
                 sessions = EXCLUDED.sessions, users = EXCLUDED.users,
@@ -175,26 +182,31 @@ class GA4SyncService:
         return count
 
     async def _sync_pages(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-                          date_str, target_date):
+                          FilterExpression, Filter, date_str, target_date):
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str,
+            FilterExpression, Filter, date_str,
             dimensions=["pagePath", "pageTitle"],
-            metrics=["screenPageViews", "averageSessionDuration", "entrances"],
+            metrics=["screenPageViews", "averageSessionDuration", "sessions"],
         )
         count = 0
         sql = text("""
-            INSERT INTO raw_ga4_pages (date, page_path, page_title, page_views, avg_time_on_page, entrances)
-            VALUES (:date, :page_path, :page_title, :page_views, :avg_time_on_page, :entrances)
+            INSERT INTO raw_ga4_pages (date, page_path, page_title, page_views,
+                avg_time_on_page, entrances, exits, bounce_rate)
+            VALUES (:date, :page_path, :page_title, :page_views,
+                :avg_time_on_page, :entrances, 0, 0)
             ON CONFLICT (date, page_path) DO UPDATE SET
                 page_title = EXCLUDED.page_title,
                 page_views = EXCLUDED.page_views, avg_time_on_page = EXCLUDED.avg_time_on_page,
                 entrances = EXCLUDED.entrances
         """)
         for row in response.rows:
+            page_path = _dim(row, 0)
+            if not page_path.startswith("/pl/"):
+                continue
             await self.db.execute(sql, {
                 "date": target_date,
-                "page_path": _dim(row, 0), "page_title": _dim(row, 1),
+                "page_path": page_path, "page_title": _dim(row, 1),
                 "page_views": _val(row, 0, True), "avg_time_on_page": _val(row, 1),
                 "entrances": _val(row, 2, True),
             })
@@ -203,10 +215,10 @@ class GA4SyncService:
         return count
 
     async def _sync_geo(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-                        date_str, target_date):
+                        FilterExpression, Filter, date_str, target_date):
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str,
+            FilterExpression, Filter, date_str,
             dimensions=["country", "city"],
             metrics=["sessions", "totalUsers", "newUsers"],
         )
@@ -229,10 +241,10 @@ class GA4SyncService:
         return count
 
     async def _sync_devices(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-                            date_str, target_date):
+                            FilterExpression, Filter, date_str, target_date):
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            date_str,
+            FilterExpression, Filter, date_str,
             dimensions=["deviceCategory", "browser", "operatingSystem"],
             metrics=["sessions", "totalUsers"],
         )

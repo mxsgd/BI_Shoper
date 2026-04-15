@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
 } from "recharts";
 import { api } from "../api";
 import type { TrafficData } from "../api";
+import { FocusBanner } from "../components/FocusBanner";
+import { LineHitDot } from "../components/ChartHitDot";
 
 const DEVICE_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"];
 
@@ -19,13 +21,28 @@ export default function Traffic() {
   const [data, setData] = useState<TrafficData | null>(null);
   const [period, setPeriod] = useState(30);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const isFirstFetch = useRef(true);
+
+  const toggleDate = (d: string) => setSelectedDate((prev) => (prev === d ? null : d));
+  const clearSelection = () => setSelectedDate(null);
+
+  const setPeriodAndClear = (p: number) => {
+    clearSelection();
+    setPeriod(p);
+  };
 
   useEffect(() => {
-    setLoading(true);
-    api.traffic(period).then(setData).finally(() => setLoading(false));
-  }, [period]);
+    if (isFirstFetch.current) setLoading(true);
+    api.traffic(period, selectedDate ?? undefined)
+      .then(setData)
+      .finally(() => {
+        setLoading(false);
+        isFirstFetch.current = false;
+      });
+  }, [period, selectedDate]);
 
-  if (loading) return <Loader />;
+  if (loading && !data) return <Loader />;
   if (!data) return <p>Brak danych</p>;
 
   if (!data.has_data) {
@@ -53,8 +70,14 @@ export default function Traffic() {
           <h2 className="text-2xl font-bold">Ruch na stronie</h2>
           <p className="text-sm text-slate-500">Dane z Google Analytics 4 + konwersja Shoper</p>
         </div>
-        <PeriodSelector value={period} onChange={setPeriod} />
+        <PeriodSelector value={period} onChange={setPeriodAndClear} />
       </div>
+
+      <FocusBanner
+        selectedDate={selectedDate}
+        onClear={clearSelection}
+        subtitle="KPI, lejek, źródła ruchu i tabele dotyczą wybranej daty."
+      />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
@@ -82,28 +105,38 @@ export default function Traffic() {
 
       {/* Sessions vs Orders Chart */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Sesje vs Zamówienia</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-1">Sesje vs Zamówienia</h3>
+        <p className="text-xs text-slate-400 mb-3">Kliknij linię „Sesje” przy wybranym dniu, aby zawęzić metryki i tabele.</p>
         <ResponsiveContainer width="100%" height={300}>
-          <AreaChart data={data.time_series}>
-            <defs>
-              <linearGradient id="colorSess" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2} />
-                <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="colorOrd" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-              </linearGradient>
-            </defs>
+          <LineChart data={data.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v) => v.slice(5)} interval="preserveStartEnd" />
             <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
             <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
             <Tooltip />
             <Legend />
-            <Area yAxisId="left" type="monotone" dataKey="sessions" stroke="#6366f1" fill="url(#colorSess)" strokeWidth={2} name="Sesje" />
-            <Area yAxisId="right" type="monotone" dataKey="orders" stroke="#10b981" fill="url(#colorOrd)" strokeWidth={2} name="Zamówienia" />
-          </AreaChart>
+            <Line
+              yAxisId="left"
+              type="monotone"
+              dataKey="sessions"
+              stroke="#6366f1"
+              strokeWidth={2}
+              name="Sesje"
+              dot={(props) => LineHitDot(props, selectedDate, toggleDate)}
+              activeDot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="orders"
+              stroke="#10b981"
+              strokeWidth={2}
+              name="Zamówienia"
+              dot={false}
+              isAnimationActive={false}
+            />
+          </LineChart>
         </ResponsiveContainer>
       </div>
 
@@ -206,13 +239,16 @@ export default function Traffic() {
                   nameKey="device_category"
                   cx="50%" cy="50%"
                   innerRadius={50} outerRadius={90}
-                  label={({ device_category, pct }) => `${device_category} ${pct}%`}
+                  label={(props: { payload?: { device_category?: string; pct?: number }; device_category?: string; pct?: number }) => {
+                    const p = props.payload ?? props;
+                    return `${p.device_category ?? ""} ${p.pct ?? 0}%`;
+                  }}
                 >
                   {data.devices.map((_, i) => (
                     <Cell key={i} fill={DEVICE_COLORS[i % DEVICE_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(v: number) => v.toLocaleString("pl-PL")} />
+                <Tooltip formatter={(v) => Number(v ?? 0).toLocaleString("pl-PL")} />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>

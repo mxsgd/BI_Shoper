@@ -11,3 +11,7 @@ dist/
 backend/app/config.py
 docs/shops_config.py
 Shoper_Documentation_Link.txt
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
