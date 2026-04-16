@@ -13,6 +13,7 @@ from .database import engine, Base, async_session
 from .routers import dashboard, orders, products, customers, stores, analytics
 from .scheduler.jobs import setup_scheduler
 from .services.transform_service import TransformService
+from .services.tracker_sync import sync_tracker_events_from_remote
 
 # Import all models to register them with SQLAlchemy
 from .models import (
@@ -24,6 +25,7 @@ from .models import (
     RawGA4Funnel, RawGA4FunnelDevice, RawGA4CartProduct,
     FactOrder, FactOrderItem,
     DimCustomer, DimProduct, DimCategory, DimDate,
+    TrackerEventLocal,
 )
 
 logging.basicConfig(
@@ -104,6 +106,7 @@ async def lifespan(app: FastAPI):
     async with async_session() as db:
         ts = TransformService(db)
         await ts.ensure_dim_date()
+    await sync_tracker_events_from_remote()
     setup_scheduler()
     yield
     await engine.dispose()

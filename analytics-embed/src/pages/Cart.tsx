@@ -47,19 +47,6 @@ export default function Cart() {
         <PeriodSelector value={period} onChange={setPeriod} />
       </div>
 
-      {/* No funnel data notice — shown at top */}
-      {!f && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-6">
-          <p className="text-amber-800 font-medium">Brak danych lejka GA4 e-commerce</p>
-          <p className="text-sm text-amber-600 mt-1">
-            Lejek, segmentacja i porzucenia wymagają GA4 e-commerce events
-            (view_item, add_to_cart, begin_checkout, purchase).
-            Upewnij się, że sklep wysyła te eventy do GA4 i uruchom synchronizację.
-          </p>
-          <p className="text-xs text-amber-500 mt-2">Metryki zamówień poniżej pochodzą z Shopera — nie wymagają GA4.</p>
-        </div>
-      )}
-
       {/* ── KPI Row 1: Funnel rates ── */}
       {f && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">

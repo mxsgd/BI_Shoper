@@ -308,6 +308,15 @@ export interface CartData {
   abandoned_vs_purchased: { date: string; purchased: number; abandoned: number }[];
 }
 
+export interface TrackerEventSummary {
+  period_days: number;
+  total_events: number;
+  distinct_users: number;
+  since_iso: string;
+  by_event: { event_name: string; count: number }[];
+  top_urls: { url: string; count: number }[];
+}
+
 export const api = {
   overview: (period = 30, focusDate?: string) =>
     get<OverviewData>("/analytics/overview", { period, focus_date: focusDate || undefined }),
@@ -322,4 +331,5 @@ export const api = {
   traffic: (period = 30, focusDate?: string) =>
     get<TrafficData>("/analytics/traffic", { period, focus_date: focusDate || undefined }),
   cart: (period = 30) => get<CartData>("/analytics/cart", { period }),
+  tracker: (period = 7) => get<TrackerEventSummary>("/analytics/tracker", { period }),
 };
