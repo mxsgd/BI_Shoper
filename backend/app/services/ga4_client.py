@@ -98,6 +98,9 @@ class GA4SyncService:
         counts["pages"] = await self._sync_pages(*api, date_str, target_date)
         counts["geo"] = await self._sync_geo(*api, date_str, target_date)
         counts["devices"] = await self._sync_devices(*api, date_str, target_date)
+        counts["funnel"] = await self._sync_funnel(*api, date_str, target_date)
+        counts["funnel_devices"] = await self._sync_funnel_devices(*api, date_str, target_date)
+        counts["cart_products"] = await self._sync_cart_products(*api, date_str, target_date)
 
         logger.info("GA4 sync for %s: %s", date_str, counts)
         return {"ok": True, "date": date_str, **counts}
@@ -260,6 +263,122 @@ class GA4SyncService:
                 "date": target_date,
                 "device_category": _dim(row, 0), "browser": _dim(row, 1), "os": _dim(row, 2),
                 "sessions": _val(row, 0, True), "users": _val(row, 1, True),
+            })
+            count += 1
+        await self.db.commit()
+        return count
+
+    _FUNNEL_EVENTS = (
+        "view_item", "add_to_cart", "begin_checkout",
+        "add_payment_info", "purchase", "remove_from_cart",
+    )
+
+    async def _sync_funnel(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+                           FilterExpression, Filter, date_str, target_date):
+        response = _run_report(
+            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+            FilterExpression, Filter, date_str,
+            dimensions=["eventName"],
+            metrics=["eventCount", "eventValue"],
+        )
+        counts = {e: 0 for e in self._FUNNEL_EVENTS}
+        values = {e: 0.0 for e in self._FUNNEL_EVENTS}
+        for row in response.rows:
+            name = _dim(row, 0)
+            if name in counts:
+                counts[name] = _val(row, 0, True)
+                values[name] = _val(row, 1)
+
+        sql = text("""
+            INSERT INTO raw_ga4_funnel
+                (date, view_item, add_to_cart, begin_checkout, add_payment_info,
+                 purchase, remove_from_cart, add_to_cart_value, purchase_value)
+            VALUES
+                (:date, :view_item, :add_to_cart, :begin_checkout, :add_payment_info,
+                 :purchase, :remove_from_cart, :add_to_cart_value, :purchase_value)
+            ON CONFLICT (date) DO UPDATE SET
+                view_item = EXCLUDED.view_item, add_to_cart = EXCLUDED.add_to_cart,
+                begin_checkout = EXCLUDED.begin_checkout, add_payment_info = EXCLUDED.add_payment_info,
+                purchase = EXCLUDED.purchase, remove_from_cart = EXCLUDED.remove_from_cart,
+                add_to_cart_value = EXCLUDED.add_to_cart_value, purchase_value = EXCLUDED.purchase_value
+        """)
+        await self.db.execute(sql, {
+            "date": target_date,
+            **counts,
+            "add_to_cart_value": values["add_to_cart"],
+            "purchase_value": values["purchase"],
+        })
+        await self.db.commit()
+        return 1
+
+    async def _sync_funnel_devices(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+                                   FilterExpression, Filter, date_str, target_date):
+        response = _run_report(
+            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+            FilterExpression, Filter, date_str,
+            dimensions=["eventName", "deviceCategory"],
+            metrics=["eventCount"],
+        )
+        device_data: dict[str, dict[str, int]] = {}
+        for row in response.rows:
+            event_name = _dim(row, 0)
+            if event_name not in self._FUNNEL_EVENTS:
+                continue
+            device = _dim(row, 1)
+            if device not in device_data:
+                device_data[device] = {e: 0 for e in self._FUNNEL_EVENTS}
+            device_data[device][event_name] = _val(row, 0, True)
+
+        sql = text("""
+            INSERT INTO raw_ga4_funnel_devices
+                (date, device_category, view_item, add_to_cart, begin_checkout,
+                 add_payment_info, purchase, remove_from_cart)
+            VALUES
+                (:date, :device_category, :view_item, :add_to_cart, :begin_checkout,
+                 :add_payment_info, :purchase, :remove_from_cart)
+            ON CONFLICT (date, device_category) DO UPDATE SET
+                view_item = EXCLUDED.view_item, add_to_cart = EXCLUDED.add_to_cart,
+                begin_checkout = EXCLUDED.begin_checkout, add_payment_info = EXCLUDED.add_payment_info,
+                purchase = EXCLUDED.purchase, remove_from_cart = EXCLUDED.remove_from_cart
+        """)
+        count = 0
+        for device, events in device_data.items():
+            await self.db.execute(sql, {"date": target_date, "device_category": device, **events})
+            count += 1
+        await self.db.commit()
+        return count
+
+    async def _sync_cart_products(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+                                  FilterExpression, Filter, date_str, target_date):
+        response = _run_report(
+            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
+            FilterExpression, Filter, date_str,
+            dimensions=["itemName", "itemId"],
+            metrics=["addToCarts", "ecommercePurchases", "itemRevenue"],
+        )
+        sql = text("""
+            INSERT INTO raw_ga4_cart_products
+                (date, item_name, item_id, add_to_cart_count, purchase_count, item_revenue)
+            VALUES
+                (:date, :item_name, :item_id, :add_to_cart_count, :purchase_count, :item_revenue)
+            ON CONFLICT (date, item_name) DO UPDATE SET
+                item_id = EXCLUDED.item_id,
+                add_to_cart_count = EXCLUDED.add_to_cart_count,
+                purchase_count = EXCLUDED.purchase_count,
+                item_revenue = EXCLUDED.item_revenue
+        """)
+        count = 0
+        for row in response.rows:
+            name = _dim(row, 0)
+            if not name or name == "(not set)":
+                continue
+            await self.db.execute(sql, {
+                "date": target_date,
+                "item_name": name,
+                "item_id": _dim(row, 1) or None,
+                "add_to_cart_count": _val(row, 0, True),
+                "purchase_count": _val(row, 1, True),
+                "item_revenue": _val(row, 2),
             })
             count += 1
         await self.db.commit()

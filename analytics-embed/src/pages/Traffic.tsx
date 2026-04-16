@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from "react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  PieChart, Pie, Cell, Legend, BarChart, Bar,
 } from "recharts";
 import { api } from "../api";
-import type { TrafficData } from "../api";
+import type { TrafficData, TrafficFunnel } from "../api";
 import { FocusBanner } from "../components/FocusBanner";
 import { LineHitDot } from "../components/ChartHitDot";
 
@@ -88,9 +88,9 @@ export default function Traffic() {
         <KpiCard title="Konwersja" value={`${conv.conversion_rate}%`} accent />
       </div>
 
-      {/* Conversion Funnel */}
+      {/* Simple Conversion Funnel */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Lejek konwersji</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-4">Lejek konwersji (sesje → zamówienia)</h3>
         <div className="flex items-center gap-3">
           <FunnelStep label="Sesje" value={conv.sessions} pct={100} />
           <Arrow />
@@ -102,6 +102,11 @@ export default function Traffic() {
           </div>
         </div>
       </div>
+
+      {/* Extended Sales Funnel */}
+      {data.funnel && data.funnel.view_item > 0 && (
+        <ExtendedFunnel funnel={data.funnel} />
+      )}
 
       {/* Sessions vs Orders Chart */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
@@ -300,6 +305,81 @@ function PeriodSelector({ value, onChange }: { value: number; onChange: (v: numb
       ))}
     </div>
   );
+}
+
+const FUNNEL_STEPS: { key: keyof TrafficFunnel; label: string; color: string }[] = [
+  { key: "view_item", label: "Wyświetlenia produktu", color: "#6366f1" },
+  { key: "add_to_cart", label: "Dodania do koszyka", color: "#8b5cf6" },
+  { key: "begin_checkout", label: "Wejście do checkout", color: "#f59e0b" },
+  { key: "add_payment_info", label: "Płatność rozpoczęta", color: "#f97316" },
+  { key: "purchase", label: "Zakup", color: "#10b981" },
+];
+
+function ExtendedFunnel({ funnel }: { funnel: TrafficFunnel }) {
+  const maxVal = funnel.view_item || 1;
+
+  const chartData = FUNNEL_STEPS.map((s) => ({
+    name: s.label,
+    value: funnel[s.key] as number,
+    fill: s.color,
+  }));
+
+  return (
+    <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
+      <h3 className="text-sm font-semibold text-slate-700 mb-1">Lejek sprzedażowy (rozszerzony)</h3>
+      <p className="text-xs text-slate-400 mb-5">Dane z GA4 e-commerce events — szczegóły w zakładce Koszyk</p>
+
+      <div className="space-y-3 mb-6">
+        {FUNNEL_STEPS.map((step, i) => {
+          const val = funnel[step.key] as number;
+          const pct = maxVal > 0 ? val / maxVal * 100 : 0;
+          const prevVal = i > 0 ? (funnel[FUNNEL_STEPS[i - 1].key] as number) : null;
+          const dropPct = prevVal && prevVal > 0 ? round((1 - val / prevVal) * 100) : null;
+          return (
+            <div key={step.key} className="flex items-center gap-3">
+              <div className="w-44 text-sm text-slate-600 text-right shrink-0">{step.label}</div>
+              <div className="flex-1 relative h-9">
+                <div
+                  className="h-full rounded-md flex items-center transition-all"
+                  style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: step.color }}
+                >
+                  <span className="text-white text-xs font-semibold ml-2 whitespace-nowrap">
+                    {val.toLocaleString("pl-PL")}
+                  </span>
+                </div>
+              </div>
+              <div className="w-16 text-right text-xs tabular-nums text-slate-500">{round(pct)}%</div>
+              <div className="w-20 text-right text-xs tabular-nums">
+                {dropPct !== null && dropPct > 0 ? (
+                  <span className="text-red-500">-{dropPct}%</span>
+                ) : dropPct !== null ? (
+                  <span className="text-emerald-500">0%</span>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-12} />
+          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
+          <Tooltip formatter={(v) => Number(v ?? 0).toLocaleString("pl-PL")} />
+          <Bar dataKey="value" name="Zdarzenia" radius={[4, 4, 0, 0]}>
+            {chartData.map((d, i) => (
+              <Cell key={i} fill={d.fill} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function round(v: number) {
+  return Math.round(v * 10) / 10;
 }
 
 function formatDuration(seconds: number): string {

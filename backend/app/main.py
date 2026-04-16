@@ -21,6 +21,7 @@ from .models import (
     RawPayment, RawShipping, RawCategory, RawDiscount, RawStatus,
     RawProducer, RawTax, RawProductStock, RawParcel, RawUserGroup, RawCurrency,
     RawGA4Traffic, RawGA4Source, RawGA4Page, RawGA4Geo, RawGA4Device,
+    RawGA4Funnel, RawGA4FunnelDevice, RawGA4CartProduct,
     FactOrder, FactOrderItem,
     DimCustomer, DimProduct, DimCategory, DimDate,
 )
@@ -78,6 +79,17 @@ async def _ensure_constraints(conn):
          "CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_categories_store_category ON raw_categories (store_id, category_id)"),
     ]
     for name, ddl in constraints:
+        try:
+            await conn.execute(sa_text(ddl))
+        except Exception:
+            pass
+
+    alter_cols = [
+        "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS remove_from_cart INTEGER DEFAULT 0",
+        "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS add_to_cart_value NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS purchase_value NUMERIC(12,2) DEFAULT 0",
+    ]
+    for ddl in alter_cols:
         try:
             await conn.execute(sa_text(ddl))
         except Exception:

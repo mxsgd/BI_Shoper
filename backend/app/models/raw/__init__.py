@@ -21,6 +21,7 @@ from .raw_ga4_sources import RawGA4Source
 from .raw_ga4_pages import RawGA4Page
 from .raw_ga4_geo import RawGA4Geo
 from .raw_ga4_devices import RawGA4Device
+from .raw_ga4_funnel import RawGA4Funnel, RawGA4FunnelDevice, RawGA4CartProduct
 
 __all__ = [
     "RawOrder",
@@ -44,4 +45,7 @@ __all__ = [
     "RawGA4Page",
     "RawGA4Geo",
     "RawGA4Device",
+    "RawGA4Funnel",
+    "RawGA4FunnelDevice",
+    "RawGA4CartProduct",
 ]

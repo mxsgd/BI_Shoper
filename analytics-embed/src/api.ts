@@ -220,16 +220,92 @@ export interface TrafficDevice {
   pct: number;
 }
 
+export interface TrafficFunnel {
+  view_item: number;
+  add_to_cart: number;
+  begin_checkout: number;
+  add_payment_info: number;
+  purchase: number;
+  add_to_cart_rate: number;
+  cart_abandonment_rate: number;
+  checkout_abandonment_rate: number;
+  payment_to_purchase_rate: number;
+  overall_conversion_rate: number;
+}
+
 export interface TrafficData {
   has_data: boolean;
   focus_date?: string | null;
   overview: TrafficOverview | null;
   conversion: TrafficConversion | null;
+  funnel: TrafficFunnel | null;
   time_series: TrafficTimePoint[];
   sources: TrafficSource[];
   top_pages: TrafficPage[];
   geo: TrafficGeo[];
   devices: TrafficDevice[];
+}
+
+export interface CartFunnel {
+  view_item: number;
+  add_to_cart: number;
+  begin_checkout: number;
+  add_payment_info: number;
+  purchase: number;
+  remove_from_cart: number;
+  abandoned: number;
+  add_to_cart_rate: number;
+  cart_abandonment_rate: number;
+  checkout_abandonment_rate: number;
+  payment_to_purchase_rate: number;
+  overall_conversion_rate: number;
+  avg_cart_value: number;
+  avg_purchase_value: number;
+}
+
+export interface CartDeviceSegment {
+  device: string;
+  view_item: number;
+  add_to_cart: number;
+  begin_checkout: number;
+  add_payment_info: number;
+  purchase: number;
+  remove_from_cart: number;
+  add_to_cart_rate: number;
+  cart_to_purchase_rate: number;
+}
+
+export interface CartProduct {
+  name: string;
+  item_id: string | null;
+  add_to_cart: number;
+  purchases: number;
+  drop_off: number;
+  drop_off_pct: number;
+  revenue: number;
+}
+
+export interface CartOrderMetrics {
+  total_orders: number;
+  avg_order_value: number;
+  avg_items_per_order: number;
+  single_item_pct: number;
+  multi_item_pct: number;
+  discount_pct: number;
+  avg_value_with_discount: number;
+  avg_value_without_discount: number;
+}
+
+export interface CartData {
+  period_days: number;
+  has_funnel_data: boolean;
+  funnel: CartFunnel | null;
+  funnel_time_series: { date: string; view_item: number; add_to_cart: number; begin_checkout: number; purchase: number; remove_from_cart: number }[];
+  device_segments: CartDeviceSegment[];
+  top_abandoned_products: CartProduct[];
+  order_metrics: CartOrderMetrics;
+  items_histogram: { items: number; orders: number }[];
+  abandoned_vs_purchased: { date: string; purchased: number; abandoned: number }[];
 }
 
 export const api = {
@@ -245,4 +321,5 @@ export const api = {
   channels: (period = 90, group_by = "month") => get<ChannelData>("/analytics/channels", { period, group_by }),
   traffic: (period = 30, focusDate?: string) =>
     get<TrafficData>("/analytics/traffic", { period, focus_date: focusDate || undefined }),
+  cart: (period = 30) => get<CartData>("/analytics/cart", { period }),
 };

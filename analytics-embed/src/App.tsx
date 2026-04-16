@@ -6,6 +6,7 @@ import Customers from "./pages/Customers";
 import Trends from "./pages/Trends";
 import Retention from "./pages/Retention";
 import Traffic from "./pages/Traffic";
+import Cart from "./pages/Cart";
 import { usePageView } from "./usePageView";
 
 const NAV = [
@@ -16,6 +17,7 @@ const NAV = [
   { to: "/trends", label: "Trendy", icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" },
   { to: "/retention", label: "Retencja", icon: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" },
   { to: "/traffic", label: "Ruch", icon: "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { to: "/cart", label: "Koszyk", icon: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" },
 ];
 
 function Sidebar() {
@@ -68,6 +70,7 @@ export default function App() {
           <Route path="/trends" element={<Trends />} />
           <Route path="/retention" element={<Retention />} />
           <Route path="/traffic" element={<Traffic />} />
+          <Route path="/cart" element={<Cart />} />
         </Routes>
       </main>
     </div>

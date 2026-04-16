@@ -25,6 +25,9 @@ from .raw import (
     RawGA4Page,
     RawGA4Geo,
     RawGA4Device,
+    RawGA4Funnel,
+    RawGA4FunnelDevice,
+    RawGA4CartProduct,
 )
 
 # CORE layer (star schema - analytical model)
@@ -68,6 +71,9 @@ __all__ = [
     "RawGA4Page",
     "RawGA4Geo",
     "RawGA4Device",
+    "RawGA4Funnel",
+    "RawGA4FunnelDevice",
+    "RawGA4CartProduct",
     # CORE layer
     "FactOrder",
     "FactOrderItem",
