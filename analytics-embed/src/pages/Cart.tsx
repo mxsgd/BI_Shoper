@@ -144,8 +144,8 @@ export default function Cart() {
               );
             })}
             {f.remove_from_cart > 0 && (
-              <div className="flex items-center gap-3 opacity-70">
-                <div className="w-44 text-sm text-slate-400 text-right shrink-0 italic">Usunięcia z koszyka</div>
+              <div className="flex items-center gap-3">
+                <div className="w-44 text-sm text-slate-600 text-right shrink-0 italic">Usunięcia z koszyka</div>
                 <div className="flex-1 relative h-7">
                   <div
                     className="h-full rounded-md flex items-center bg-red-400"

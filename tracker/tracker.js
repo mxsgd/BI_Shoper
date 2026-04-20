@@ -160,6 +160,17 @@
     return p.indexOf("/product") !== -1 || p.indexOf("/produkt") !== -1 || p.indexOf("/p/") !== -1;
   }
 
+  function isLikelyCheckoutPath(path) {
+    var p = clean(path).toLowerCase();
+    if (!p) return false;
+    return (
+      p.indexOf("checkout") !== -1 ||
+      p.indexOf("kasa") !== -1 ||
+      p.indexOf("zamowienie") !== -1 ||
+      p.indexOf("zamow") !== -1
+    );
+  }
+
   function markOnce(key, value) {
     try {
       if (sessionStorage.getItem(key) === value) return false;
@@ -329,7 +340,7 @@
   }
 
   var p = location.pathname.toLowerCase();
-  var isCheckout = p.indexOf("checkout") !== -1 || p.indexOf("zamowienie") !== -1 || p.indexOf("zamow") !== -1;
+  var isCheckout = isLikelyCheckoutPath(p);
   if (isCheckout && markOnce(CHECKOUT_KEY, location.pathname)) {
     send("begin_checkout", {
       step: "entry",
@@ -360,15 +371,24 @@
     var removeWords = ["usuń", "usun", "remove", "delete", "wyrzuć", "wyrzuc"];
     var isRemove = removeWords.some(function (w) { return text.indexOf(w) !== -1; }) ||
       el.className && String(el.className).toLowerCase().indexOf("remove") !== -1;
-    var checkoutWords = ["dalej", "next", "kontynuuj", "przejdź", "przejdz", "zamawiam", "zamów", "zamow", "pay", "płacę", "place order"];
+    var checkoutWords = ["dalej", "next", "kontynuuj", "przejdź", "przejdz", "zamawiam", "zamów", "zamow", "do kasy", "kasa", "pay", "płacę", "place order"];
     var isCheckoutAction = checkoutWords.some(function (w) { return text.indexOf(w) !== -1; });
+    var href = clean(el.getAttribute("href") || "");
+    var goesToCheckout = isLikelyCheckoutPath(href);
 
     if (isCart) {
       var ctx = getProductContext();
       send("add_to_cart", Object.assign({}, meta, ctx));
     } else if (isRemove) {
       send("remove_from_cart", Object.assign({}, meta, getProductContext()));
-    } else if (isCheckout && isCheckoutAction) {
+    } else if (isCheckoutAction || goesToCheckout) {
+      if (markOnce(CHECKOUT_KEY, location.pathname)) {
+        send("begin_checkout", {
+          step: "entry",
+          path: location.pathname,
+          source: "click_cta"
+        });
+      }
       sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "click");
     } else {
       send("click", meta);
@@ -376,11 +396,25 @@
   }, true);
 
   document.addEventListener("submit", function (e) {
-    if (!isCheckout) return;
     var form = e.target;
     if (!form || !form.tagName) return;
+    var formAction = clean(form.getAttribute("action") || "");
+    var formId = clean(form.id || "");
+    var formName = clean(form.getAttribute("name") || "");
+    var formClass = clean(form.className || "");
+    var isCheckoutSubmit = isCheckout ||
+      isLikelyCheckoutPath(formAction) ||
+      /checkout|kasa|zamow|zamów|payment|platn|płatn/i.test(formId + " " + formName + " " + formClass);
+    if (!isCheckoutSubmit) return;
     var id = clean(form.id || "");
     var name = clean(form.getAttribute("name") || "");
+    if (markOnce(CHECKOUT_KEY, location.pathname)) {
+      send("begin_checkout", {
+        step: "entry",
+        path: location.pathname,
+        source: "submit_form"
+      });
+    }
     sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "submit:" + firstNonEmpty([id, name, "form"]));
   }, true);
 })();
