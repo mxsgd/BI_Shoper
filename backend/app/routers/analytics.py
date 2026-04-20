@@ -1187,6 +1187,155 @@ async def cart_analysis(
     has_funnel = (await db.execute(text(_safe_table_exists_sql("raw_ga4_funnel")))).scalar()
     has_devices = (await db.execute(text(_safe_table_exists_sql("raw_ga4_funnel_devices")))).scalar()
     has_products = (await db.execute(text(_safe_table_exists_sql("raw_ga4_cart_products")))).scalar()
+    has_tracker = (await db.execute(text(_safe_table_exists_sql("tracker_events_local")))).scalar()
+
+    tracker_funnel = None
+    tracker_funnel_ts = []
+    tracker_top_products = []
+    tracker_abandoned_vs_purchased = []
+
+    # ── Tracker-based funnel (preferred over GA4 when available) ──
+    if has_tracker:
+        now = datetime.utcnow()
+        since_epoch = int((now - timedelta(days=period)).timestamp())
+        tracker_count = (await db.execute(text("""
+            SELECT COUNT(*)
+            FROM tracker_events_local
+            WHERE timestamp >= :since_epoch
+              AND event_name IN ('view_item', 'add_to_cart', 'begin_checkout', 'checkout_step', 'purchase', 'remove_from_cart')
+        """), {"since_epoch": since_epoch})).scalar() or 0
+
+        if tracker_count > 0:
+            tracker_funnel_sql = text("""
+                SELECT
+                    COUNT(*) FILTER (WHERE event_name = 'view_item') AS view_item,
+                    COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart,
+                    COUNT(*) FILTER (WHERE event_name = 'begin_checkout') AS begin_checkout,
+                    COUNT(*) FILTER (
+                        WHERE event_name = 'checkout_step'
+                          AND COALESCE(metadata->>'step', '') = 'payment'
+                    ) AS add_payment_info,
+                    COUNT(*) FILTER (WHERE event_name = 'purchase') AS purchase,
+                    COUNT(*) FILTER (WHERE event_name = 'remove_from_cart') AS remove_from_cart,
+                    AVG(
+                        CASE
+                            WHEN event_name = 'add_to_cart'
+                             AND COALESCE(metadata->>'price', '') ~ '^-?\\d+(\\.\\d+)?$'
+                            THEN (metadata->>'price')::numeric
+                        END
+                    ) AS avg_cart_value
+                FROM tracker_events_local
+                WHERE timestamp >= :since_epoch
+            """)
+            tf = (await db.execute(tracker_funnel_sql, {"since_epoch": since_epoch})).one()
+            vi = int(tf.view_item or 0)
+            atc = int(tf.add_to_cart or 0)
+            bc = int(tf.begin_checkout or 0)
+            api_v = int(tf.add_payment_info or 0)
+            pur = int(tf.purchase or 0)
+            rfc = int(tf.remove_from_cart or 0)
+            abandoned = max(atc - pur, 0)
+            avg_cart_value = float(tf.avg_cart_value or 0)
+
+            tracker_funnel = {
+                "view_item": vi,
+                "add_to_cart": atc,
+                "begin_checkout": bc,
+                "add_payment_info": api_v,
+                "purchase": pur,
+                "remove_from_cart": rfc,
+                "abandoned": abandoned,
+                "add_to_cart_rate": round(atc / vi * 100, 2) if vi else 0,
+                "cart_abandonment_rate": round((1 - pur / atc) * 100, 2) if atc else 0,
+                "checkout_abandonment_rate": round((1 - api_v / bc) * 100, 2) if bc else 0,
+                "payment_to_purchase_rate": round(pur / api_v * 100, 2) if api_v else 0,
+                "overall_conversion_rate": round(pur / vi * 100, 2) if vi else 0,
+                "avg_cart_value": round(avg_cart_value, 2),
+                # Tracker nie zbiera teraz wartości purchase na poziomie eventu.
+                "avg_purchase_value": 0,
+            }
+
+            tracker_ts_sql = text("""
+                SELECT
+                    d.day::date AS date,
+                    COALESCE(agg.view_item, 0) AS view_item,
+                    COALESCE(agg.add_to_cart, 0) AS add_to_cart,
+                    COALESCE(agg.begin_checkout, 0) AS begin_checkout,
+                    COALESCE(agg.purchase, 0) AS purchase,
+                    COALESCE(agg.remove_from_cart, 0) AS remove_from_cart
+                FROM generate_series(CAST(:since AS date), CAST(:today AS date), interval '1 day') AS d(day)
+                LEFT JOIN (
+                    SELECT
+                        to_timestamp(timestamp)::date AS dt,
+                        COUNT(*) FILTER (WHERE event_name = 'view_item') AS view_item,
+                        COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart,
+                        COUNT(*) FILTER (WHERE event_name = 'begin_checkout') AS begin_checkout,
+                        COUNT(*) FILTER (WHERE event_name = 'purchase') AS purchase,
+                        COUNT(*) FILTER (WHERE event_name = 'remove_from_cart') AS remove_from_cart
+                    FROM tracker_events_local
+                    WHERE timestamp >= :since_epoch
+                    GROUP BY dt
+                ) agg ON agg.dt = d.day::date
+                ORDER BY d.day
+            """)
+            for r in (await db.execute(tracker_ts_sql, {
+                "since": since,
+                "today": today,
+                "since_epoch": since_epoch,
+            })).all():
+                tracker_funnel_ts.append({
+                    "date": str(r.date),
+                    "view_item": int(r.view_item),
+                    "add_to_cart": int(r.add_to_cart),
+                    "begin_checkout": int(r.begin_checkout),
+                    "purchase": int(r.purchase),
+                    "remove_from_cart": int(r.remove_from_cart),
+                })
+                tracker_abandoned_vs_purchased.append({
+                    "date": str(r.date),
+                    "purchased": int(r.purchase),
+                    "abandoned": max(int(r.add_to_cart) - int(r.purchase), 0),
+                })
+
+            tracker_products_sql = text("""
+                WITH atc AS (
+                    SELECT
+                        COALESCE(NULLIF(metadata->>'product_name', ''), 'Unknown product') AS name,
+                        NULLIF(metadata->>'product_id', '') AS item_id,
+                        COUNT(*) AS add_to_cart,
+                        AVG(
+                            CASE
+                                WHEN COALESCE(metadata->>'price', '') ~ '^-?\\d+(\\.\\d+)?$'
+                                THEN (metadata->>'price')::numeric
+                            END
+                        ) AS avg_price
+                    FROM tracker_events_local
+                    WHERE timestamp >= :since_epoch
+                      AND event_name = 'add_to_cart'
+                    GROUP BY name, item_id
+                )
+                SELECT
+                    name,
+                    item_id,
+                    add_to_cart,
+                    0::bigint AS purchases,
+                    add_to_cart::bigint AS drop_off,
+                    100::numeric AS drop_off_pct,
+                    ROUND(COALESCE(add_to_cart * avg_price, 0), 2) AS revenue
+                FROM atc
+                ORDER BY add_to_cart DESC
+                LIMIT 30
+            """)
+            for r in (await db.execute(tracker_products_sql, {"since_epoch": since_epoch})).all():
+                tracker_top_products.append({
+                    "name": r.name,
+                    "item_id": r.item_id,
+                    "add_to_cart": int(r.add_to_cart),
+                    "purchases": int(r.purchases),
+                    "drop_off": int(r.drop_off),
+                    "drop_off_pct": float(r.drop_off_pct),
+                    "revenue": round(float(r.revenue or 0), 2),
+                })
 
     # ── GA4 funnel aggregates ──
     funnel = None
@@ -1377,14 +1526,14 @@ async def cart_analysis(
 
     return {
         "period_days": period,
-        "has_funnel_data": funnel is not None,
-        "funnel": funnel,
-        "funnel_time_series": funnel_ts,
+        "has_funnel_data": (tracker_funnel is not None) or (funnel is not None),
+        "funnel": tracker_funnel or funnel,
+        "funnel_time_series": tracker_funnel_ts or funnel_ts,
         "device_segments": device_segments,
-        "top_abandoned_products": top_products,
+        "top_abandoned_products": tracker_top_products or top_products,
         "order_metrics": order_metrics,
         "items_histogram": items_histogram,
-        "abandoned_vs_purchased": abandoned_vs_purchased,
+        "abandoned_vs_purchased": tracker_abandoned_vs_purchased or abandoned_vs_purchased,
     }
 
 
