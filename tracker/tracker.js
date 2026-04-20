@@ -4,6 +4,10 @@
   var ENDPOINT = script ? script.src.replace(/\/tracker\.js.*$/, "/api/event") : "/api/event";
 
   var STORAGE_KEY = "_trk_uid";
+  var VIEW_ITEM_KEY = "_trk_view_item_sent";
+  var CHECKOUT_KEY = "_trk_begin_checkout_sent";
+  var CHECKOUT_STEP_PREFIX = "_trk_checkout_step_";
+  var PURCHASE_KEY = "_trk_purchase_sent";
 
   function getUserId() {
     var uid = localStorage.getItem(STORAGE_KEY);
@@ -14,6 +18,164 @@
   }
 
   var userId = getUserId();
+
+  function clean(value) {
+    if (value == null) return "";
+    return String(value).trim();
+  }
+
+  function firstNonEmpty(values) {
+    for (var i = 0; i < values.length; i++) {
+      var v = clean(values[i]);
+      if (v) return v;
+    }
+    return "";
+  }
+
+  function getAttr(selectors, attr) {
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (!el) continue;
+      var val = clean(el.getAttribute(attr));
+      if (val) return val;
+    }
+    return "";
+  }
+
+  function getText(selectors) {
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (!el) continue;
+      var val = clean(el.textContent || el.value || "");
+      if (val) return val;
+    }
+    return "";
+  }
+
+  function parsePrice(raw) {
+    var src = clean(raw);
+    if (!src) return null;
+    var match = src.replace(",", ".").match(/-?\d+(?:\.\d+)?/);
+    if (!match) return null;
+    var num = Number(match[0]);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function productFromJsonLd() {
+    var scripts = document.querySelectorAll("script[type='application/ld+json']");
+    for (var i = 0; i < scripts.length; i++) {
+      try {
+        var parsed = JSON.parse(scripts[i].textContent || "{}");
+        var items = Array.isArray(parsed) ? parsed : (parsed["@graph"] || [parsed]);
+        for (var j = 0; j < items.length; j++) {
+          var item = items[j] || {};
+          var t = item["@type"];
+          var isProduct = t === "Product" || (Array.isArray(t) && t.indexOf("Product") !== -1);
+          if (!isProduct) continue;
+          var offer = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+          return {
+            product_id: clean(item.sku || item.productID || item.mpn || item.id || ""),
+            product_name: clean(item.name || ""),
+            price: parsePrice(offer && (offer.price || offer.lowPrice || offer.highPrice)),
+            category: clean(item.category || ""),
+            currency: clean(offer && offer.priceCurrency || "")
+          };
+        }
+      } catch (e) {}
+    }
+    return {};
+  }
+
+  function pageCategoryFromBreadcrumbs() {
+    var crumbs = document.querySelectorAll("[itemprop='itemListElement'] [itemprop='name'], .breadcrumb a, .breadcrumbs a");
+    if (!crumbs || !crumbs.length) return "";
+    if (crumbs.length >= 2) return clean(crumbs[crumbs.length - 2].textContent);
+    return clean(crumbs[0].textContent);
+  }
+
+  function getProductContext() {
+    var jsonLd = productFromJsonLd();
+    var productId = firstNonEmpty([
+      jsonLd.product_id,
+      getAttr(["meta[property='product:retailer_item_id']", "meta[name='product:id']"], "content"),
+      getAttr(["[data-product-id]", "[data-item-id]"], "data-product-id"),
+      getAttr(["[data-item-id]"], "data-item-id"),
+      getAttr(["input[name='product_id']", "input[name='product-id']"], "value")
+    ]);
+    var productName = firstNonEmpty([
+      jsonLd.product_name,
+      getAttr(["meta[property='og:title']"], "content"),
+      getText(["h1[itemprop='name']", "h1.product-name", "h1"])
+    ]);
+    var price = parsePrice(firstNonEmpty([
+      jsonLd.price,
+      getAttr(["meta[property='product:price:amount']", "meta[name='product:price:amount']"], "content"),
+      getAttr(["[itemprop='price']"], "content"),
+      getText(["[itemprop='price']", ".price", ".product-price"])
+    ]));
+    var category = firstNonEmpty([
+      jsonLd.category,
+      getText(["[itemprop='category']", ".product-category"]),
+      pageCategoryFromBreadcrumbs()
+    ]);
+    var currency = firstNonEmpty([
+      jsonLd.currency,
+      getAttr(["meta[property='product:price:currency']", "meta[name='product:price:currency']"], "content")
+    ]);
+
+    var out = {};
+    if (productId) out.product_id = productId;
+    if (productName) out.product_name = productName;
+    if (price != null) out.price = price;
+    if (category) out.category = category;
+    if (currency) out.currency = currency;
+    return out;
+  }
+
+  function isProductPage(ctx) {
+    if (ctx.product_id || ctx.product_name) return true;
+    var p = location.pathname.toLowerCase();
+    return p.indexOf("/product") !== -1 || p.indexOf("/produkt") !== -1 || p.indexOf("/p/") !== -1;
+  }
+
+  function markOnce(key, value) {
+    try {
+      if (sessionStorage.getItem(key) === value) return false;
+      sessionStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function checkoutStepFromPage(path, pageTitle) {
+    var p = (path || "").toLowerCase();
+    var t = (pageTitle || "").toLowerCase();
+
+    if (p.indexOf("adres") !== -1 || t.indexOf("adres") !== -1 || document.querySelector("input[name*='address'], input[id*='address']")) {
+      return "address";
+    }
+    if (p.indexOf("dostaw") !== -1 || p.indexOf("shipping") !== -1 || t.indexOf("dostaw") !== -1) {
+      return "shipping";
+    }
+    if (p.indexOf("platn") !== -1 || p.indexOf("payment") !== -1 || t.indexOf("platn") !== -1 || t.indexOf("płatn") !== -1) {
+      return "payment";
+    }
+    if (p.indexOf("podsum") !== -1 || p.indexOf("review") !== -1 || t.indexOf("podsum") !== -1) {
+      return "review";
+    }
+    return "checkout";
+  }
+
+  function sendCheckoutStep(step, source) {
+    var dedupeKey = CHECKOUT_STEP_PREFIX + step;
+    if (!markOnce(dedupeKey, location.pathname)) return;
+    send("checkout_step", {
+      step: step,
+      source: source || "page",
+      path: location.pathname
+    });
+  }
 
   function send(eventName, meta) {
     var payload = {
@@ -35,7 +197,30 @@
   // page_view — on load
   send("page_view", { referrer: document.referrer, title: document.title });
 
-  // click + add_to_cart — any button / [role=button] / input[type=submit]
+  var productCtx = getProductContext();
+  if (isProductPage(productCtx) && markOnce(VIEW_ITEM_KEY, location.pathname)) {
+    send("view_item", productCtx);
+  }
+
+  var p = location.pathname.toLowerCase();
+  var isCheckout = p.indexOf("checkout") !== -1 || p.indexOf("zamowienie") !== -1 || p.indexOf("zamow") !== -1;
+  if (isCheckout && markOnce(CHECKOUT_KEY, location.pathname)) {
+    send("begin_checkout", {
+      step: "entry",
+      path: location.pathname
+    });
+    sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "entry");
+  }
+
+  var title = (document.title || "").toLowerCase();
+  var isPurchase = p.indexOf("thank") !== -1 || p.indexOf("dziekuj") !== -1 || p.indexOf("potwierdzenie") !== -1 || title.indexOf("dziękuj") !== -1 || title.indexOf("podsumowanie") !== -1;
+  if (isPurchase && markOnce(PURCHASE_KEY, location.pathname)) {
+    send("purchase", {
+      path: location.pathname
+    });
+  }
+
+  // click + add_to_cart/remove_from_cart/checkout_step — any button / [role=button] / input[type=submit]
   document.addEventListener("click", function (e) {
     var el = e.target.closest("button, [role='button'], input[type='submit'], a");
     if (!el) return;
@@ -45,11 +230,30 @@
 
     var cartWords = ["koszyk", "cart", "add", "dodaj"];
     var isCart = cartWords.some(function (w) { return text.indexOf(w) !== -1; });
+    var removeWords = ["usuń", "usun", "remove", "delete", "wyrzuć", "wyrzuc"];
+    var isRemove = removeWords.some(function (w) { return text.indexOf(w) !== -1; }) ||
+      el.className && String(el.className).toLowerCase().indexOf("remove") !== -1;
+    var checkoutWords = ["dalej", "next", "kontynuuj", "przejdź", "przejdz", "zamawiam", "zamów", "zamow", "pay", "płacę", "place order"];
+    var isCheckoutAction = checkoutWords.some(function (w) { return text.indexOf(w) !== -1; });
 
     if (isCart) {
-      send("add_to_cart", meta);
+      var ctx = getProductContext();
+      send("add_to_cart", Object.assign({}, meta, ctx));
+    } else if (isRemove) {
+      send("remove_from_cart", Object.assign({}, meta, getProductContext()));
+    } else if (isCheckout && isCheckoutAction) {
+      sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "click");
     } else {
       send("click", meta);
     }
+  }, true);
+
+  document.addEventListener("submit", function (e) {
+    if (!isCheckout) return;
+    var form = e.target;
+    if (!form || !form.tagName) return;
+    var id = clean(form.id || "");
+    var name = clean(form.getAttribute("name") || "");
+    sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "submit:" + firstNonEmpty([id, name, "form"]));
   }, true);
 })();
