@@ -54,13 +54,13 @@ def _get_store_filter(FilterExpression, Filter):
 
 def _run_report(client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                 FilterExpression, Filter,
-                date_str: str, dimensions: list[str], metrics: list[str]):
+                date_str: str, dimensions: list[str], metrics: list[str], dimension_filter=None):
     request = RunReportRequest(
         property=property_id,
         date_ranges=[DateRange(start_date=date_str, end_date=date_str)],
         dimensions=[Dimension(name=d) for d in dimensions],
         metrics=[Metric(name=m) for m in metrics],
-        dimension_filter=_get_store_filter(FilterExpression, Filter),
+        dimension_filter=dimension_filter,
         limit=10000,
     )
     return client.run_report(request)
@@ -197,11 +197,13 @@ class GA4SyncService:
 
     async def _sync_pages(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                           FilterExpression, Filter, date_str, target_date):
+        page_filter = _get_store_filter(FilterExpression, Filter)
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
             FilterExpression, Filter, date_str,
             dimensions=["pagePath", "pageTitle"],
             metrics=["screenPageViews", "averageSessionDuration", "sessions"],
+            dimension_filter=page_filter,
         )
         count = 0
         sql = text("""

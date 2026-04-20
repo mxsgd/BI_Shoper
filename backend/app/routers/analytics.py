@@ -1223,7 +1223,14 @@ async def cart_analysis(
                              AND COALESCE(metadata->>'price', '') ~ '^-?\\d+(\\.\\d+)?$'
                             THEN (metadata->>'price')::numeric
                         END
-                    ) AS avg_cart_value
+                    ) AS avg_cart_value,
+                    AVG(
+                        CASE
+                            WHEN event_name = 'purchase'
+                             AND COALESCE(metadata->>'value', '') ~ '^-?\\d+(\\.\\d+)?$'
+                            THEN (metadata->>'value')::numeric
+                        END
+                    ) AS avg_purchase_value
                 FROM tracker_events_local
                 WHERE timestamp >= :since_epoch
             """)
@@ -1236,6 +1243,7 @@ async def cart_analysis(
             rfc = int(tf.remove_from_cart or 0)
             abandoned = max(atc - pur, 0)
             avg_cart_value = float(tf.avg_cart_value or 0)
+            avg_purchase_value = float(tf.avg_purchase_value or 0)
 
             tracker_funnel = {
                 "view_item": vi,
@@ -1251,8 +1259,7 @@ async def cart_analysis(
                 "payment_to_purchase_rate": round(pur / api_v * 100, 2) if api_v else 0,
                 "overall_conversion_rate": round(pur / vi * 100, 2) if vi else 0,
                 "avg_cart_value": round(avg_cart_value, 2),
-                # Tracker nie zbiera teraz wartości purchase na poziomie eventu.
-                "avg_purchase_value": 0,
+                "avg_purchase_value": round(avg_purchase_value, 2),
             }
 
             tracker_ts_sql = text("""
@@ -1336,6 +1343,7 @@ async def cart_analysis(
                     "drop_off_pct": float(r.drop_off_pct),
                     "revenue": round(float(r.revenue or 0), 2),
                 })
+
 
     # ── GA4 funnel aggregates ──
     funnel = None
@@ -1526,14 +1534,15 @@ async def cart_analysis(
 
     return {
         "period_days": period,
-        "has_funnel_data": (tracker_funnel is not None) or (funnel is not None),
-        "funnel": tracker_funnel or funnel,
-        "funnel_time_series": tracker_funnel_ts or funnel_ts,
-        "device_segments": device_segments,
-        "top_abandoned_products": tracker_top_products or top_products,
+        # Twardy podział źródeł: /cart = tracker.
+        "has_funnel_data": tracker_funnel is not None,
+        "funnel": tracker_funnel,
+        "funnel_time_series": tracker_funnel_ts,
+        "device_segments": [],
+        "top_abandoned_products": tracker_top_products,
         "order_metrics": order_metrics,
         "items_histogram": items_histogram,
-        "abandoned_vs_purchased": tracker_abandoned_vs_purchased or abandoned_vs_purchased,
+        "abandoned_vs_purchased": tracker_abandoned_vs_purchased,
     }
 
 

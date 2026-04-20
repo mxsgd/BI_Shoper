@@ -4,7 +4,7 @@ import {
   Cell, Legend,
 } from "recharts";
 import { api } from "../api";
-import type { CartData, CartFunnel, CartDeviceSegment } from "../api";
+import type { CartData, CartFunnel } from "../api";
 
 const PERIODS = [
   { value: 7, label: "7D" },
@@ -52,7 +52,7 @@ export default function Cart() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
           <KpiCard
             title="Add-to-cart rate"
-            value={`${f.add_to_cart_rate}%`}
+            value={pctLabel(f.add_to_cart_rate)}
             desc="% sesji → dodanie do koszyka"
             good={f.add_to_cart_rate > 5}
           />
@@ -111,8 +111,12 @@ export default function Cart() {
           <div className="space-y-3 mb-6">
             {FUNNEL_STEPS.map((step, i) => {
               const val = f[step.key] as number;
-              const maxVal = f.view_item || 1;
-              const pct = val / maxVal * 100;
+              const maxVal = Math.max(
+                ...FUNNEL_STEPS.map((s) => Number(f[s.key] || 0)),
+                1,
+              );
+              const pct = (val / maxVal) * 100;
+              const pctOfView = ((val / (f.view_item || 1)) * 100);
               const prevVal = i > 0 ? (f[FUNNEL_STEPS[i - 1].key] as number) : null;
               const dropPct = prevVal && prevVal > 0 ? rd((1 - val / prevVal) * 100) : null;
               return (
@@ -121,14 +125,14 @@ export default function Cart() {
                   <div className="flex-1 relative h-9">
                     <div
                       className="h-full rounded-md flex items-center"
-                      style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: step.color }}
+                      style={{ width: `${Math.max(Math.min(pct, 100), 2)}%`, backgroundColor: step.color }}
                     >
                       <span className="text-white text-xs font-semibold ml-2 whitespace-nowrap">
                         {val.toLocaleString("pl-PL")}
                       </span>
                     </div>
                   </div>
-                  <div className="w-16 text-right text-xs tabular-nums text-slate-500">{rd(pct)}%</div>
+                  <div className="w-16 text-right text-xs tabular-nums text-slate-500">{pctLabel(pctOfView)}</div>
                   <div className="w-20 text-right text-xs tabular-nums">
                     {dropPct !== null && dropPct > 0 ? (
                       <span className="text-red-500">-{dropPct}%</span>
@@ -212,12 +216,7 @@ export default function Cart() {
         )}
       </div>
 
-      {/* ── 4. Device segmentation ── */}
-      {data.device_segments.length > 0 && (
-        <DeviceSegmentation segments={data.device_segments} />
-      )}
-
-      {/* ── 5. Top abandoned products ── */}
+      {/* ── 4. Top abandoned products ── */}
       {data.top_abandoned_products.length > 0 && (
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
           <h3 className="text-sm font-semibold text-slate-700 mb-3">Najczęściej porzucane produkty</h3>
@@ -258,83 +257,6 @@ export default function Cart() {
         </div>
       )}
 
-    </div>
-  );
-}
-
-function DeviceSegmentation({ segments }: { segments: CartDeviceSegment[] }) {
-  const DEVICE_COLORS: Record<string, string> = {
-    desktop: "#6366f1",
-    mobile: "#f59e0b",
-    tablet: "#10b981",
-  };
-
-  const chartData = segments.map((s) => ({
-    name: s.device,
-    "Add to cart rate": s.add_to_cart_rate,
-    "Koszyk → Zakup": s.cart_to_purchase_rate,
-  }));
-
-  return (
-    <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-      <h3 className="text-sm font-semibold text-slate-700 mb-1">Segmentacja koszyka: urządzenia</h3>
-      <p className="text-xs text-slate-400 mb-4">Mobile vs desktop — porównanie konwersji lejka</p>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-              <Tooltip formatter={(v) => `${v}%`} />
-              <Legend />
-              <Bar dataKey="Add to cart rate" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Koszyk → Zakup" fill="#10b981" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="overflow-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-slate-500 border-b border-slate-200">
-                <th className="pb-2">Urządzenie</th>
-                <th className="pb-2 text-right">View</th>
-                <th className="pb-2 text-right">ATC</th>
-                <th className="pb-2 text-right">Checkout</th>
-                <th className="pb-2 text-right">Zakup</th>
-                <th className="pb-2 text-right">ATC %</th>
-                <th className="pb-2 text-right">Conv %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {segments.map((s) => (
-                <tr key={s.device} className="border-t border-slate-50">
-                  <td className="py-1.5">
-                    <span className="inline-block w-2.5 h-2.5 rounded-full mr-2" style={{ backgroundColor: DEVICE_COLORS[s.device] || "#94a3b8" }} />
-                    {s.device}
-                  </td>
-                  <td className="py-1.5 text-right">{s.view_item.toLocaleString("pl-PL")}</td>
-                  <td className="py-1.5 text-right">{s.add_to_cart.toLocaleString("pl-PL")}</td>
-                  <td className="py-1.5 text-right">{s.begin_checkout.toLocaleString("pl-PL")}</td>
-                  <td className="py-1.5 text-right">{s.purchase.toLocaleString("pl-PL")}</td>
-                  <td className="py-1.5 text-right font-medium">{s.add_to_cart_rate}%</td>
-                  <td className="py-1.5 text-right">
-                    <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${
-                      s.cart_to_purchase_rate > 30 ? "text-emerald-600 bg-emerald-50" :
-                      s.cart_to_purchase_rate > 15 ? "text-amber-600 bg-amber-50" :
-                      "text-red-600 bg-red-50"
-                    }`}>
-                      {s.cart_to_purchase_rate}%
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }
@@ -381,6 +303,12 @@ function PeriodSelector({ value, onChange }: { value: number; onChange: (v: numb
 
 function rd(v: number) {
   return Math.round(v * 10) / 10;
+}
+
+function pctLabel(v: number) {
+  if (!Number.isFinite(v)) return "0%";
+  if (v > 100) return ">100%";
+  return `${rd(v)}%`;
 }
 
 function Loader() {
