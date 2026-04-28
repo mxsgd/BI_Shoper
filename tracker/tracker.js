@@ -115,10 +115,36 @@
     return clean(crumbs[0].textContent);
   }
 
+  function productFromPath(pathname) {
+    var p = clean(pathname);
+    if (!p) return {};
+    // Typical Shoper product URL: /pl/p/Product-Name/1453
+    var match = p.match(/\/p\/([^\/]+)\/(\d+)(?:\/)?$/i);
+    if (!match) return {};
+
+    var slug = clean(match[1] || "");
+    var id = clean(match[2] || "");
+    var name = "";
+    if (slug) {
+      try {
+        name = clean(decodeURIComponent(slug).replace(/-/g, " "));
+      } catch (e) {
+        name = clean(slug.replace(/-/g, " "));
+      }
+    }
+
+    var out = {};
+    if (id) out.product_id = id;
+    if (name) out.product_name = name;
+    return out;
+  }
+
   function getProductContext() {
     var jsonLd = productFromJsonLd();
+    var pathCtx = productFromPath(location.pathname);
     var productId = firstNonEmpty([
       jsonLd.product_id,
+      pathCtx.product_id,
       getAttr(["meta[property='product:retailer_item_id']", "meta[name='product:id']"], "content"),
       getAttr(["[data-product-id]", "[data-item-id]"], "data-product-id"),
       getAttr(["[data-item-id]"], "data-item-id"),
@@ -126,6 +152,7 @@
     ]);
     var productName = firstNonEmpty([
       jsonLd.product_name,
+      pathCtx.product_name,
       getAttr(["meta[property='og:title']"], "content"),
       getText(["h1[itemprop='name']", "h1.product-name", "h1"])
     ]);

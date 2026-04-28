@@ -12,6 +12,33 @@ async function get<T>(path: string, params: Record<string, string | number | und
   return res.json();
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function postForm<T>(path: string, formData: FormData, params: Record<string, string | number | undefined> = {}): Promise<T> {
+  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined) continue;
+    qs.set(k, String(v));
+  }
+  const res = await fetch(`${BASE}${path}?${qs}`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export interface OverviewData {
   period_days: number;
   focus_date?: string | null;
@@ -317,6 +344,63 @@ export interface TrackerEventSummary {
   top_urls: { url: string; count: number }[];
 }
 
+export interface PriceUpdateValidationError {
+  row_number: number;
+  code: string;
+  error_message: string;
+}
+
+export interface PriceUpdateStats {
+  total: number;
+  processed: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  warning: number;
+  success_rate: number;
+  failure_rate: number;
+  coverage_rate: number;
+}
+
+export interface PriceUpdateJob {
+  job_id: string;
+  store_id?: number;
+  file_name: string;
+  status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  fatal_error?: string | null;
+  validation: {
+    valid_rows: number;
+    invalid_rows: number;
+    errors: PriceUpdateValidationError[];
+  };
+  stats: PriceUpdateStats;
+}
+
+export interface PriceUpdateLogItem {
+  timestamp: string;
+  job_id: string;
+  row_number: number;
+  code: string;
+  old_price: number | null;
+  new_price: number | null;
+  status: "SUCCESS" | "ERROR" | "WARNING" | "SKIPPED";
+  message: string;
+  http_status: number | null;
+  request_id: string | null;
+  comment: string | null;
+}
+
+export interface PriceUpdateLogsResponse {
+  items: PriceUpdateLogItem[];
+  page: number;
+  per_page: number;
+  total: number;
+  pages: number;
+}
+
 export const api = {
   overview: (period = 30, focusDate?: string) =>
     get<OverviewData>("/analytics/overview", { period, focus_date: focusDate || undefined }),
@@ -332,4 +416,22 @@ export const api = {
     get<TrafficData>("/analytics/traffic", { period, focus_date: focusDate || undefined }),
   cart: (period = 30) => get<CartData>("/analytics/cart", { period }),
   tracker: (period = 7) => get<TrackerEventSummary>("/analytics/tracker", { period }),
+  syncNow: (scope: "all" | "orders" | "products" | "customers" | "reference" | "transform" = "all") =>
+    post<Record<string, unknown>>("/stores/sync-now", { store_id: STORE_ID, scope }),
+  createPriceUpdateJob: (file: File, duplicate_mode: "error" | "last_wins" = "error") => {
+    const form = new FormData();
+    form.append("file", file);
+    return postForm<PriceUpdateJob>("/price-update/jobs", form, { duplicate_mode });
+  },
+  getPriceUpdateJob: (jobId: string) => get<PriceUpdateJob>(`/price-update/jobs/${jobId}`),
+  getPriceUpdateLogs: (
+    jobId: string,
+    params: {
+      status?: "ALL" | "SUCCESS" | "ERROR" | "WARNING" | "SKIPPED";
+      query?: string;
+      page?: number;
+      per_page?: number;
+    } = {},
+  ) => get<PriceUpdateLogsResponse>(`/price-update/jobs/${jobId}/logs`, params),
+  getPriceUpdateLogsExportUrl: (jobId: string) => `${BASE}/price-update/jobs/${jobId}/logs/export.csv`,
 };

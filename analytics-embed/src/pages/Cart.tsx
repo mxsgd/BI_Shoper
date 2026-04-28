@@ -108,7 +108,7 @@ export default function Cart() {
           <h3 className="text-sm font-semibold text-slate-700 mb-1">Lejek koszyka</h3>
           <p className="text-xs text-slate-400 mb-5">View → Add to cart → Checkout → Purchase — gdzie ginie kasa</p>
 
-          <div className="space-y-3 mb-6">
+          <div className="space-y-3 mb-6 overflow-x-auto">
             {FUNNEL_STEPS.map((step, i) => {
               const val = f[step.key] as number;
               const maxVal = Math.max(
@@ -120,17 +120,16 @@ export default function Cart() {
               const prevVal = i > 0 ? (f[FUNNEL_STEPS[i - 1].key] as number) : null;
               const dropPct = prevVal && prevVal > 0 ? rd((1 - val / prevVal) * 100) : null;
               return (
-                <div key={step.key} className="flex items-center gap-3">
+                <div key={step.key} className="flex items-center gap-3 min-w-[760px]">
                   <div className="w-44 text-sm text-slate-600 text-right shrink-0">{step.label}</div>
                   <div className="flex-1 relative h-9">
                     <div
-                      className="h-full rounded-md flex items-center"
+                      className="h-full rounded-md"
                       style={{ width: `${Math.max(Math.min(pct, 100), 2)}%`, backgroundColor: step.color }}
-                    >
-                      <span className="text-white text-xs font-semibold ml-2 whitespace-nowrap">
-                        {val.toLocaleString("pl-PL")}
-                      </span>
-                    </div>
+                    />
+                  </div>
+                  <div className="w-20 text-right text-xs tabular-nums text-slate-700 font-semibold">
+                    {val.toLocaleString("pl-PL")}
                   </div>
                   <div className="w-16 text-right text-xs tabular-nums text-slate-500">{pctLabel(pctOfView)}</div>
                   <div className="w-20 text-right text-xs tabular-nums">
@@ -144,19 +143,21 @@ export default function Cart() {
               );
             })}
             {f.remove_from_cart > 0 && (
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-[760px]">
                 <div className="w-44 text-sm text-slate-600 text-right shrink-0 italic">Usunięcia z koszyka</div>
                 <div className="flex-1 relative h-7">
                   <div
-                    className="h-full rounded-md flex items-center bg-red-400"
+                    className="h-full rounded-md bg-red-400"
                     style={{ width: `${Math.max(f.remove_from_cart / (f.view_item || 1) * 100, 1)}%` }}
-                  >
-                    <span className="text-white text-xs font-semibold ml-2 whitespace-nowrap">
-                      {f.remove_from_cart.toLocaleString("pl-PL")}
-                    </span>
-                  </div>
+                  />
                 </div>
-                <div className="w-36" />
+                <div className="w-20 text-right text-xs tabular-nums text-slate-700 font-semibold">
+                  {f.remove_from_cart.toLocaleString("pl-PL")}
+                </div>
+                <div className="w-16 text-right text-xs tabular-nums text-slate-500">
+                  {pctLabel((f.remove_from_cart / (f.view_item || 1)) * 100)}
+                </div>
+                <div className="w-20 text-right text-xs tabular-nums text-slate-500">—</div>
               </div>
             )}
           </div>

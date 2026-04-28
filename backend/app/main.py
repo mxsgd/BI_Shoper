@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine, Base, async_session
-from .routers import dashboard, orders, products, customers, stores, analytics
-from .scheduler.jobs import setup_scheduler
+from .routers import dashboard, orders, products, customers, stores, analytics, price_update
+from .scheduler.jobs import setup_scheduler, run_ga4_sync
 from .services.transform_service import TransformService
 from .services.tracker_sync import sync_tracker_events_from_remote
 
@@ -106,6 +106,7 @@ async def lifespan(app: FastAPI):
     async with async_session() as db:
         ts = TransformService(db)
         await ts.ensure_dim_date()
+    await run_ga4_sync()
     await sync_tracker_events_from_remote()
     setup_scheduler()
     yield
@@ -133,6 +134,7 @@ app.include_router(products.router)
 app.include_router(customers.router)
 app.include_router(stores.router)
 app.include_router(analytics.router)
+app.include_router(price_update.router)
 
 
 @app.get("/api/health")
