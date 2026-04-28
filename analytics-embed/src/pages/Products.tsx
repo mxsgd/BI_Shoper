@@ -5,17 +5,30 @@ import {
 import { api } from "../api";
 import type { TopProductsData } from "../api";
 
+const PAGE_STEP = 20;
+const MAX_PRODUCTS = 100;
+
 export default function Products() {
   const [data, setData] = useState<TopProductsData | null>(null);
   const [period, setPeriod] = useState(90);
+  const [limit, setLimit] = useState(PAGE_STEP);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    api.topProducts(period, 20).then(setData).finally(() => setLoading(false));
-  }, [period]);
+    api.topProducts(period, limit).then(setData).finally(() => setLoading(false));
+  }, [period, limit]);
 
-  if (loading) return <Loader />;
+  const setPeriodAndReset = (days: number) => {
+    setPeriod(days);
+    setLimit(PAGE_STEP);
+  };
+
+  const loadMore = () => {
+    setLimit((prev) => Math.min(prev + PAGE_STEP, MAX_PRODUCTS));
+  };
+
+  if (loading && !data) return <Loader />;
   if (!data) return <p>Brak danych</p>;
 
   const chartData = data.products.map((p, i) => ({
@@ -28,15 +41,18 @@ export default function Products() {
   const totalRevenue = data.products.reduce((s, p) => s + p.revenue, 0);
   const totalQty = data.products.reduce((s, p) => s + p.quantity, 0);
 
+  const shownProducts = data.products.length;
+  const canLoadMore = !loading && limit < MAX_PRODUCTS && shownProducts >= limit;
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">Produkty — Top 20</h2>
-        <PeriodSelector value={period} onChange={setPeriod} />
+        <h2 className="text-2xl font-bold">Produkty — Top {shownProducts}</h2>
+        <PeriodSelector value={period} onChange={setPeriodAndReset} />
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-8">
-        <Stat label="Przychód (top 20)" value={`${totalRevenue.toLocaleString("pl-PL")} zł`} />
+        <Stat label={`Przychód (top ${shownProducts})`} value={`${totalRevenue.toLocaleString("pl-PL")} zł`} />
         <Stat label="Sprzedanych szt." value={totalQty} />
         <Stat label="Pareto 80%" value={`${data.products.filter((p) => p.cumulative_pct <= 80).length} produktów`} />
       </div>
@@ -91,6 +107,18 @@ export default function Products() {
             </tbody>
           </table>
         </div>
+        {canLoadMore ? (
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              onClick={loadMore}
+              disabled={loading}
+              className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? "Wczytywanie..." : "Rozwiń dalej (+20)"}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

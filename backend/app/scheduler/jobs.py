@@ -217,12 +217,21 @@ async def transform_core():
 
 
 async def run_ga4_sync() -> dict:
-    """Pull yesterday's GA4 data into raw_ga4_* tables."""
+    """Pull GA4 data for today and yesterday into raw_ga4_* tables."""
     async with async_session() as db:
         try:
             svc = GA4SyncService(db)
-            yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
-            return await svc.sync_day(yesterday)
+            today = datetime.now(timezone.utc).date()
+            yesterday = today - timedelta(days=1)
+            yesterday_result = await svc.sync_day(yesterday)
+            today_result = await svc.sync_day(today)
+            return {
+                "ok": bool(yesterday_result.get("ok")) and bool(today_result.get("ok")),
+                "dates": {
+                    str(yesterday): yesterday_result,
+                    str(today): today_result,
+                },
+            }
         except Exception as e:
             logger.error("GA4 sync failed: %s", e)
             return {"ok": False, "error": str(e)}
@@ -239,7 +248,7 @@ async def run_ga4_backfill() -> dict:
             return {"ok": False, "error": str(e)}
 
 
-async def sync_ga4_daily():
+async def sync_ga4_hourly():
     await run_ga4_sync()
 
 
@@ -272,6 +281,6 @@ def setup_scheduler():
     scheduler.add_job(sync_all_stores_customers, "interval", hours=24, id="sync_customers")
     scheduler.add_job(sync_all_stores_reference, "interval", hours=24, id="sync_reference")
     scheduler.add_job(transform_core, "interval", hours=1, id="transform_core", misfire_grace_time=300)
-    scheduler.add_job(sync_ga4_daily, "cron", hour=6, minute=0, id="sync_ga4", misfire_grace_time=3600)
+    scheduler.add_job(sync_ga4_hourly, "interval", hours=1, id="sync_ga4", misfire_grace_time=1800)
     scheduler.start()
-    logger.info("Scheduler started: orders/1h, products/6h, customers/24h, reference/24h, transform/1h, ga4/daily@06:00")
+    logger.info("Scheduler started: orders/1h, products/6h, customers/24h, reference/24h, transform/1h, ga4/1h(today+yesterday)")
