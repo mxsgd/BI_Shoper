@@ -4,7 +4,7 @@ import {
   BarChart, Bar, Cell,
 } from "recharts";
 import { api } from "../api";
-import type { OverviewData, RevenueData, TrafficData } from "../api";
+import type { OverviewData, RevenueData, TrafficData, TrackerEventSummary } from "../api";
 import { FocusBanner } from "../components/FocusBanner";
 import { LineHitDot } from "../components/ChartHitDot";
 
@@ -32,6 +32,7 @@ export default function Dashboard() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [revenue, setRevenue] = useState<RevenueData | null>(null);
   const [trafficData, setTrafficData] = useState<TrafficData | null>(null);
+  const [tracker, setTracker] = useState<TrackerEventSummary | null>(null);
   const [period, setPeriod] = useState(30);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -52,11 +53,13 @@ export default function Dashboard() {
       api.overview(period, fd),
       api.revenue(period, "day", fd),
       api.traffic(period, fd),
+      api.tracker(7),
     ])
-      .then(([o, r, t]) => {
+      .then(([o, r, t, tr]) => {
         setOverview(o);
         setRevenue(r);
         setTrafficData(t);
+        setTracker(tr);
       })
       .finally(() => {
         setLoading(false);
@@ -205,6 +208,30 @@ export default function Dashboard() {
               </>
             )}
           </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">Tracker (ostatnie 7 dni)</h3>
+          {tracker && tracker.total_events > 0 ? (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Wszystkie eventy</span>
+                <span className="font-medium">{tracker.total_events.toLocaleString("pl-PL")}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Unikalni użytkownicy</span>
+                <span className="font-medium">{tracker.distinct_users.toLocaleString("pl-PL")}</span>
+              </div>
+              {tracker.by_event.slice(0, 3).map((e) => (
+                <div key={e.event_name} className="flex justify-between">
+                  <span className="text-slate-500 truncate max-w-[60%]" title={e.event_name}>{e.event_name}</span>
+                  <span className="font-medium">{e.count.toLocaleString("pl-PL")}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">Brak eventów trackera w ostatnich 7 dniach.</p>
+          )}
         </div>
       </div>
     </div>

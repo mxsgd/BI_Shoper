@@ -54,13 +54,13 @@ def _get_store_filter(FilterExpression, Filter):
 
 def _run_report(client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                 FilterExpression, Filter,
-                date_str: str, dimensions: list[str], metrics: list[str]):
+                date_str: str, dimensions: list[str], metrics: list[str], dimension_filter=None):
     request = RunReportRequest(
         property=property_id,
         date_ranges=[DateRange(start_date=date_str, end_date=date_str)],
         dimensions=[Dimension(name=d) for d in dimensions],
         metrics=[Metric(name=m) for m in metrics],
-        dimension_filter=_get_store_filter(FilterExpression, Filter),
+        dimension_filter=dimension_filter,
         limit=10000,
     )
     return client.run_report(request)
@@ -81,6 +81,14 @@ class GA4SyncService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _sync_part(self, counts: dict, errors: dict, key: str, coro):
+        try:
+            counts[key] = await coro
+        except Exception as exc:
+            logger.warning("GA4 sync part '%s' failed: %s", key, exc)
+            counts[key] = 0
+            errors[key] = str(exc)
+
     async def sync_day(self, target_date: date) -> dict:
         """Pull all GA4 reports for a single day and upsert into raw tables."""
         parts = _get_ga4_client()
@@ -91,19 +99,22 @@ class GA4SyncService:
         client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter = parts
         date_str = target_date.isoformat()
         counts = {}
+        errors = {}
 
         api = (client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter)
-        counts["traffic"] = await self._sync_traffic(*api, date_str, target_date)
-        counts["sources"] = await self._sync_sources(*api, date_str, target_date)
-        counts["pages"] = await self._sync_pages(*api, date_str, target_date)
-        counts["geo"] = await self._sync_geo(*api, date_str, target_date)
-        counts["devices"] = await self._sync_devices(*api, date_str, target_date)
-        counts["funnel"] = await self._sync_funnel(*api, date_str, target_date)
-        counts["funnel_devices"] = await self._sync_funnel_devices(*api, date_str, target_date)
-        counts["cart_products"] = await self._sync_cart_products(*api, date_str, target_date)
+        await self._sync_part(counts, errors, "traffic", self._sync_traffic(*api, date_str, target_date))
+        await self._sync_part(counts, errors, "sources", self._sync_sources(*api, date_str, target_date))
+        await self._sync_part(counts, errors, "pages", self._sync_pages(*api, date_str, target_date))
+        await self._sync_part(counts, errors, "geo", self._sync_geo(*api, date_str, target_date))
+        await self._sync_part(counts, errors, "devices", self._sync_devices(*api, date_str, target_date))
+        await self._sync_part(counts, errors, "funnel", self._sync_funnel(*api, date_str, target_date))
+        await self._sync_part(counts, errors, "funnel_devices", self._sync_funnel_devices(*api, date_str, target_date))
 
-        logger.info("GA4 sync for %s: %s", date_str, counts)
-        return {"ok": True, "date": date_str, **counts}
+        if errors:
+            logger.warning("GA4 sync for %s completed with errors: %s", date_str, errors)
+        else:
+            logger.info("GA4 sync for %s: %s", date_str, counts)
+        return {"ok": True, "date": date_str, "errors": errors, **counts}
 
     async def backfill(self, days: int = 90) -> dict:
         """Pull historical GA4 data when tables are empty."""
@@ -186,11 +197,13 @@ class GA4SyncService:
 
     async def _sync_pages(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                           FilterExpression, Filter, date_str, target_date):
+        page_filter = _get_store_filter(FilterExpression, Filter)
         response = _run_report(
             client, property_id, RunReportRequest, DateRange, Dimension, Metric,
             FilterExpression, Filter, date_str,
             dimensions=["pagePath", "pageTitle"],
             metrics=["screenPageViews", "averageSessionDuration", "sessions"],
+            dimension_filter=page_filter,
         )
         count = 0
         sql = text("""
@@ -348,38 +361,3 @@ class GA4SyncService:
         await self.db.commit()
         return count
 
-    async def _sync_cart_products(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-                                  FilterExpression, Filter, date_str, target_date):
-        response = _run_report(
-            client, property_id, RunReportRequest, DateRange, Dimension, Metric,
-            FilterExpression, Filter, date_str,
-            dimensions=["itemName", "itemId"],
-            metrics=["addToCarts", "ecommercePurchases", "itemRevenue"],
-        )
-        sql = text("""
-            INSERT INTO raw_ga4_cart_products
-                (date, item_name, item_id, add_to_cart_count, purchase_count, item_revenue)
-            VALUES
-                (:date, :item_name, :item_id, :add_to_cart_count, :purchase_count, :item_revenue)
-            ON CONFLICT (date, item_name) DO UPDATE SET
-                item_id = EXCLUDED.item_id,
-                add_to_cart_count = EXCLUDED.add_to_cart_count,
-                purchase_count = EXCLUDED.purchase_count,
-                item_revenue = EXCLUDED.item_revenue
-        """)
-        count = 0
-        for row in response.rows:
-            name = _dim(row, 0)
-            if not name or name == "(not set)":
-                continue
-            await self.db.execute(sql, {
-                "date": target_date,
-                "item_name": name,
-                "item_id": _dim(row, 1) or None,
-                "add_to_cart_count": _val(row, 0, True),
-                "purchase_count": _val(row, 1, True),
-                "item_revenue": _val(row, 2),
-            })
-            count += 1
-        await self.db.commit()
-        return count

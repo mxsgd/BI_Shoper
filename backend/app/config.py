@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     ga4_property_id: str = ""
     ga4_credentials_path: str = ""
 
+    # Opcjonalny URL Postgresa z Railway (tabela `events` trackera) — sync → tracker_events_local przy starcie
+    tracker_remote_database_url: str = ""
+    # Dev na Windows: Railway proxy często ma self-signed chain — wyłącza SSL dla synca (tylko lokalnie)
+    tracker_remote_ssl_insecure: bool = False
+
     @property
     def sync_db_url(self) -> str:
         """Sync URL for Alembic (replace asyncpg with psycopg2)."""
