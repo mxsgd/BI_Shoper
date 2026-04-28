@@ -45,7 +45,6 @@ from .order import Order, OrderItem
 from .product import Product, ProductSnapshot
 from .customer import Customer
 from .traffic import TrafficStats
-from .tracker_event_local import TrackerEventLocal
 
 __all__ = [
     # Store
@@ -89,5 +88,4 @@ __all__ = [
     "ProductSnapshot",
     "Customer",
     "TrafficStats",
-    "TrackerEventLocal",
 ]
