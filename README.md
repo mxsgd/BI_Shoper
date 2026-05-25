@@ -24,6 +24,21 @@ copy .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
+#### Automatyczne odnawianie tokenu Shopera
+
+Obecna integracja z Shoperem nie uzywa jeszcze pelnego OAuth 2.0 / refresh token z Partner API. Zamiast tego backend potrafi automatycznie pobrac nowy `access_token` z `POST /auth`, jesli ma login i haslo WebAPI.
+
+Mozesz skonfigurowac to na 2 sposoby:
+
+- w bazie / API sklepu: pola `api_login` + `api_password`
+- przez zmienne srodowiskowe:
+  - `SHOPER_STORE_<id>_LOGIN`
+  - `SHOPER_STORE_<id>_PASSWORD`
+  - albo fallback globalny: `SHOPER_DEFAULT_LOGIN` / `SHOPER_DEFAULT_PASSWORD`
+  - zachowany jest tez stary fallback: `SHOPER_MK_LOGIN` / `SHOPER_MK_PASSWORD`
+
+Przy odpowiedzi `401 unauthorized_client` backend sprobuje pobrac nowy token i zapisze go w `stores.api_token` razem z czasem wygasniecia.
+
 ### Panel analityczny (iframe w panelu admin Shoper)
 
 Panel jest w katalogu `analytics-embed/`; osadzamy go w panelu administracyjnym Shopera (OAuth + iframe), nie na stronie sklepu. Zob. `docs/SHOPER_PANEL_APP.md`.

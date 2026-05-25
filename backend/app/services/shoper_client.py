@@ -11,7 +11,7 @@ Usage:
 import json
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -24,11 +24,21 @@ RETRY_DELAY = 5.0
 RATE_DELAY = 0.35
 
 
+class ShoperUnauthorizedError(RuntimeError):
+    """Raised when the current token is missing, invalid, or expired."""
+
+
 class ShoperClient:
-    def __init__(self, base_url: str, token: str):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        on_unauthorized: Callable[[], Awaitable[str | None]] | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._client: httpx.AsyncClient | None = None
+        self.on_unauthorized = on_unauthorized
 
     @property
     def headers(self) -> dict:
@@ -37,6 +47,11 @@ class ShoperClient:
             "Accept": "application/json",
         }
 
+    def set_token(self, token: str) -> None:
+        self.token = token
+        if self._client and not self._client.is_closed:
+            self._client.headers.update(self.headers)
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
@@ -44,7 +59,18 @@ class ShoperClient:
                 headers=self.headers,
                 timeout=DEFAULT_TIMEOUT,
             )
+        else:
+            self._client.headers.update(self.headers)
         return self._client
+
+    async def _refresh_token_once(self) -> bool:
+        if self.on_unauthorized is None:
+            return False
+        token = await self.on_unauthorized()
+        if not token:
+            return False
+        self.set_token(token)
+        return True
 
     async def close(self):
         if self._client and not self._client.is_closed:
@@ -53,12 +79,19 @@ class ShoperClient:
     async def get_raw(self, endpoint: str, params: dict | None = None) -> dict | list | None:
         """Single GET returning full JSON response (with metadata like count/pages)."""
         client = await self._get_client()
+        did_refresh = False
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 await asyncio.sleep(RATE_DELAY)
                 r = await client.get(endpoint, params=params)
                 if r.status_code == 200:
                     return r.json()
+                if r.status_code == 401:
+                    if not did_refresh and await self._refresh_token_once():
+                        did_refresh = True
+                        client = await self._get_client()
+                        continue
+                    raise ShoperUnauthorizedError(f"GET {endpoint} -> 401: {r.text[:300]}")
                 if r.status_code == 429:
                     wait = int(r.headers.get("Retry-After", RETRY_DELAY))
                     logger.warning("Rate limited, waiting %ds (attempt %d)", wait, attempt)
@@ -76,6 +109,8 @@ class ShoperClient:
             except httpx.TimeoutException:
                 logger.warning("Timeout GET %s (attempt %d)", endpoint, attempt)
                 await asyncio.sleep(RETRY_DELAY)
+            except ShoperUnauthorizedError:
+                raise
             except Exception as e:
                 logger.error("Error GET %s: %s", endpoint, e)
                 await asyncio.sleep(RETRY_DELAY)
@@ -155,11 +190,18 @@ class ShoperClient:
     async def post(self, endpoint: str, body: dict) -> Any:
         """POST with retry logic."""
         client = await self._get_client()
+        did_refresh = False
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 r = await client.post(endpoint, json=body)
                 if r.status_code in (200, 201):
                     return r.json()
+                if r.status_code == 401:
+                    if not did_refresh and await self._refresh_token_once():
+                        did_refresh = True
+                        client = await self._get_client()
+                        continue
+                    raise ShoperUnauthorizedError(f"POST {endpoint} -> 401: {r.text[:300]}")
                 if r.status_code == 429:
                     wait = int(r.headers.get("Retry-After", RETRY_DELAY))
                     await asyncio.sleep(wait)
@@ -168,6 +210,8 @@ class ShoperClient:
                 return None
             except httpx.TimeoutException:
                 await asyncio.sleep(RETRY_DELAY)
+            except ShoperUnauthorizedError:
+                raise
             except Exception as e:
                 logger.error("Error POST %s: %s", endpoint, e)
                 await asyncio.sleep(RETRY_DELAY)
@@ -176,11 +220,18 @@ class ShoperClient:
     async def put(self, endpoint: str, body: dict) -> Any:
         """PUT with retry logic."""
         client = await self._get_client()
+        did_refresh = False
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 r = await client.put(endpoint, json=body)
                 if r.status_code == 200:
                     return r.json()
+                if r.status_code == 401:
+                    if not did_refresh and await self._refresh_token_once():
+                        did_refresh = True
+                        client = await self._get_client()
+                        continue
+                    raise ShoperUnauthorizedError(f"PUT {endpoint} -> 401: {r.text[:300]}")
                 if r.status_code == 429:
                     wait = int(r.headers.get("Retry-After", RETRY_DELAY))
                     await asyncio.sleep(wait)
@@ -189,6 +240,8 @@ class ShoperClient:
                 return None
             except httpx.TimeoutException:
                 await asyncio.sleep(RETRY_DELAY)
+            except ShoperUnauthorizedError:
+                raise
             except Exception as e:
                 logger.error("Error PUT %s: %s", endpoint, e)
                 await asyncio.sleep(RETRY_DELAY)

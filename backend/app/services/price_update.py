@@ -15,6 +15,7 @@ from ..database import async_session
 from ..models.product import Product
 from ..models.store import Store
 from .shoper_client import ShoperClient
+from .shoper_auth import ensure_store_token
 
 JobStatus = Literal["PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED"]
 LogStatus = Literal["SUCCESS", "ERROR", "SKIPPED", "WARNING"]
@@ -216,7 +217,13 @@ class PriceUpdateJobManager:
                 job.finished_at = _now_iso()
                 job.fatal_error = "Store not found or inactive"
                 return
-            client = ShoperClient(store.api_url, store.api_token)
+
+            async def _refresh_token() -> str:
+                token = await ensure_store_token(db, store, force_refresh=True)
+                client.set_token(token)
+                return token
+
+            client = ShoperClient(store.api_url, store.api_token, on_unauthorized=_refresh_token)
             try:
                 for row in job.rows:
                     await self._process_row(db, client, job, row)
