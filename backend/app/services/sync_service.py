@@ -21,6 +21,7 @@ from ..models.raw import (
     RawSubscriber,
 )
 from .shoper_client import ShoperClient
+from .shoper_auth import ensure_store_token
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,15 @@ class SyncService:
     def __init__(self, db: AsyncSession, store: Store):
         self.db = db
         self.store = store
-        self.client = ShoperClient(store.api_url, store.api_token)
+        self.client = ShoperClient(store.api_url, store.api_token, on_unauthorized=self._refresh_token)
 
     async def close(self):
         await self.client.close()
+
+    async def _refresh_token(self) -> str:
+        token = await ensure_store_token(self.db, self.store, force_refresh=True)
+        self.client.set_token(token)
+        return token
 
     # ------------------------------------------------------------------
     # Orders

@@ -14,6 +14,7 @@ import getpass
 import os
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
@@ -46,11 +47,11 @@ def base_url() -> str:
     return u or "https://www.sklep-mkfoam.pl/webapi/rest"
 
 
-def obtain_token() -> str:
+def obtain_token() -> tuple[str, int]:
     existing = (os.environ.get("SHOPER_MK_ACCESS_TOKEN") or os.environ.get("MKFOAM_API_TOKEN") or "").strip()
     if existing:
         print("Używam SHOPER_MK_ACCESS_TOKEN / MKFOAM_API_TOKEN z .env (bez /auth).")
-        return existing
+        return existing, 3600
     login = (os.environ.get("SHOPER_MK_LOGIN") or "").strip()
     password = (os.environ.get("SHOPER_MK_PASSWORD") or "").strip()
     if not login or not password:
@@ -74,8 +75,9 @@ def obtain_token() -> str:
     if not token:
         print("Brak access_token:", r.json())
         sys.exit(1)
+    expires_in = int(r.json().get("expires_in") or 3600)
     print("Token pobrany z /auth OK.")
-    return token
+    return token, expires_in
 
 
 def write_access_to_shops_config(token: str) -> None:
@@ -102,17 +104,23 @@ def write_access_to_shops_config(token: str) -> None:
 
 
 def main():
-    token = obtain_token()
+    token, expires_in = obtain_token()
     write_access_to_shops_config(token)
 
     store_id = int(os.environ.get("SHOPER_MK_STORE_ID", "1"))
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=max(expires_in - 60, 0))
 
     url = sync_db_url()
     engine = create_engine(url)
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE stores SET api_token = :t WHERE id = :id"),
-            {"t": token, "id": store_id},
+            text(
+                "UPDATE stores "
+                "SET api_token = :t, api_token_updated_at = :updated_at, api_token_expires_at = :expires_at "
+                "WHERE id = :id"
+            ),
+            {"t": token, "id": store_id, "updated_at": now, "expires_at": expires_at},
         )
     print(f"Zaktualizowano stores.api_token dla id={store_id}.")
 

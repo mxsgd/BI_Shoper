@@ -85,6 +85,11 @@ async def _ensure_constraints(conn):
             pass
 
     alter_cols = [
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS api_login VARCHAR(255)",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS api_password VARCHAR(255)",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS api_token_expires_at TIMESTAMPTZ",
+        "ALTER TABLE stores ADD COLUMN IF NOT EXISTS api_token_updated_at TIMESTAMPTZ",
+        "ALTER TABLE stores ALTER COLUMN api_token SET DEFAULT ''",
         "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS remove_from_cart INTEGER DEFAULT 0",
         "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS add_to_cart_value NUMERIC(12,2) DEFAULT 0",
         "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS purchase_value NUMERIC(12,2) DEFAULT 0",

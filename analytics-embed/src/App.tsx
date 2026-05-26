@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Routes, Route, NavLink, Navigate } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
@@ -27,6 +27,52 @@ const NAV = [
 function Sidebar() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const sawRunningSync = useRef(false);
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function loadSyncStatus() {
+      try {
+        const status = await api.getSyncStatus();
+        if (disposed) return;
+
+        const running = status.status === "running";
+        setIsRefreshing(running);
+
+        if (running) {
+          sawRunningSync.current = true;
+          setRefreshError(null);
+          return;
+        }
+
+        if (status.status === "error" && status.error) {
+          sawRunningSync.current = false;
+          setRefreshError(status.error);
+          return;
+        }
+
+        if (sawRunningSync.current && status.status === "done") {
+          sawRunningSync.current = false;
+          window.location.reload();
+        }
+      } catch {
+        if (!disposed) {
+          setIsRefreshing(false);
+        }
+      }
+    }
+
+    void loadSyncStatus();
+    const timer = window.setInterval(() => {
+      void loadSyncStatus();
+    }, 3000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   async function handleRefresh() {
     if (isRefreshing) return;
