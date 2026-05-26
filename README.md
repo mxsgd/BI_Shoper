@@ -195,3 +195,9 @@ It is a good example of building a vertical product end-to-end: from third-party
 - `docs/DB_MANAGEMENT.md`
 - `PRICE_UPDATE_PANEL_SPEC.md`
 - `docs/tracker-roadmap.md`
+
+## License
+
+This repository is proprietary and is released under an `All rights reserved` license.
+
+See `LICENSE` for details.
