@@ -3,6 +3,7 @@ Scheduled sync jobs using APScheduler.
 Runs order sync hourly, products every 6h, customers daily.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -18,6 +19,45 @@ from ..services.ga4_client import GA4SyncService
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
+_sync_statuses: dict[str, dict] = {}
+_sync_locks: dict[str, asyncio.Lock] = {}
+
+
+def _sync_key(store_id: int | None) -> str:
+    return "all" if store_id is None else str(store_id)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _get_sync_lock(store_id: int | None) -> asyncio.Lock:
+    key = _sync_key(store_id)
+    lock = _sync_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _sync_locks[key] = lock
+    return lock
+
+
+def get_sync_status(store_id: int | None) -> dict:
+    key = _sync_key(store_id)
+    status = _sync_statuses.get(key)
+    if status is None and store_id is not None:
+        global_status = _sync_statuses.get("all")
+        if global_status and global_status.get("status") == "running":
+            status = global_status
+    if status is None:
+        return {
+            "store_id": store_id,
+            "scope": None,
+            "status": "idle",
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "result": None,
+        }
+    return dict(status)
 
 
 def _stores_select(store_id: int | None):
@@ -259,20 +299,61 @@ async def run_sync_now(
     store_id: int | None = None, scope: SyncScope = "all"
 ) -> dict:
     """Run one or more sync phases; used by scheduler hooks and HTTP API."""
-    out: dict = {"scope": scope, "store_id": store_id}
-    if scope in ("all", "orders"):
-        out["orders"] = await run_orders_sync(store_id)
-    if scope in ("all", "products"):
-        out["products"] = await run_products_sync(store_id)
-    if scope in ("all", "customers"):
-        out["customers"] = await run_customers_sync(store_id)
-    if scope in ("all", "reference"):
-        out["reference"] = await run_reference_sync(store_id)
-    if scope in ("all", "transform"):
-        out["transform"] = await run_transform()
-    if scope in ("all", "ga4"):
-        out["ga4"] = await run_ga4_sync()
-    return out
+    lock = _get_sync_lock(store_id)
+    if lock.locked():
+        return {
+            "already_running": True,
+            **get_sync_status(store_id),
+        }
+
+    started_at = _now_iso()
+    _sync_statuses[_sync_key(store_id)] = {
+        "store_id": store_id,
+        "scope": scope,
+        "status": "running",
+        "started_at": started_at,
+        "finished_at": None,
+        "error": None,
+        "result": None,
+    }
+
+    async with lock:
+        try:
+            out: dict = {"scope": scope, "store_id": store_id}
+            if scope in ("all", "orders"):
+                out["orders"] = await run_orders_sync(store_id)
+            if scope in ("all", "products"):
+                out["products"] = await run_products_sync(store_id)
+            if scope in ("all", "customers"):
+                out["customers"] = await run_customers_sync(store_id)
+            if scope in ("all", "reference"):
+                out["reference"] = await run_reference_sync(store_id)
+            if scope in ("all", "transform"):
+                out["transform"] = await run_transform()
+            if scope in ("all", "ga4"):
+                out["ga4"] = await run_ga4_sync()
+
+            _sync_statuses[_sync_key(store_id)] = {
+                "store_id": store_id,
+                "scope": scope,
+                "status": "done",
+                "started_at": started_at,
+                "finished_at": _now_iso(),
+                "error": None,
+                "result": out,
+            }
+            return out
+        except Exception as exc:
+            _sync_statuses[_sync_key(store_id)] = {
+                "store_id": store_id,
+                "scope": scope,
+                "status": "error",
+                "started_at": started_at,
+                "finished_at": _now_iso(),
+                "error": str(exc),
+                "result": None,
+            }
+            raise
 
 
 def setup_scheduler():

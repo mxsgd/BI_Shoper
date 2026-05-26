@@ -2,16 +2,24 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.store import Store
 
+try:
+    from dotenv import dotenv_values
+except ImportError:  # pragma: no cover - dependency is in requirements, this is only a fallback
+    dotenv_values = None
+
 logger = logging.getLogger(__name__)
 
 AUTH_TIMEOUT = 20.0
 TOKEN_SAFETY_WINDOW = timedelta(minutes=5)
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+_REPO_DIR = _BACKEND_DIR.parent
 
 
 class ShoperAuthError(RuntimeError):
@@ -31,6 +39,27 @@ class ShoperCredentials:
     login: str
     password: str
     source: str
+
+
+def _dotenv_env() -> dict[str, str]:
+    if dotenv_values is None:
+        return {}
+
+    merged: dict[str, str] = {}
+    for env_path in (_REPO_DIR / ".env", _BACKEND_DIR / ".env"):
+        if not env_path.is_file():
+            continue
+        for key, value in dotenv_values(env_path).items():
+            if value is not None:
+                merged[key] = str(value)
+    return merged
+
+
+def _env_lookup(key: str) -> str:
+    value = (os.getenv(key) or "").strip()
+    if value:
+        return value
+    return (_dotenv_env().get(key) or "").strip()
 
 
 def has_store_credentials(store: Store) -> bool:
@@ -62,8 +91,8 @@ def resolve_store_credentials(store: Store) -> ShoperCredentials | None:
     )
 
     for login_key, password_key, source in env_candidates:
-        env_login = (os.getenv(login_key) or "").strip()
-        env_password = (os.getenv(password_key) or "").strip()
+        env_login = _env_lookup(login_key)
+        env_password = _env_lookup(password_key)
         if env_login and env_password:
             return ShoperCredentials(login=env_login, password=env_password, source=source)
     return None

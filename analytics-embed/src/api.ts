@@ -401,6 +401,17 @@ export interface PriceUpdateLogsResponse {
   pages: number;
 }
 
+export interface StoreSyncStatus {
+  store_id: number | null;
+  scope: string | null;
+  status: "idle" | "running" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  result: Record<string, unknown> | null;
+  already_running?: boolean;
+}
+
 export const api = {
   overview: (period = 30, focusDate?: string) =>
     get<OverviewData>("/analytics/overview", { period, focus_date: focusDate || undefined }),
@@ -418,6 +429,7 @@ export const api = {
   tracker: (period = 7) => get<TrackerEventSummary>("/analytics/tracker", { period }),
   syncNow: (scope: "all" | "orders" | "products" | "customers" | "reference" | "transform" = "all") =>
     post<Record<string, unknown>>("/stores/sync-now", { store_id: STORE_ID, scope }),
+  getSyncStatus: () => get<StoreSyncStatus>(`/stores/${STORE_ID}/sync-status`),
   createPriceUpdateJob: (file: File, duplicate_mode: "error" | "last_wins" = "error") => {
     const form = new FormData();
     form.append("file", file);

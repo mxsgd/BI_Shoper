@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = $PSScriptRoot
 $backendDir = Join-Path $repoRoot "backend"
 $frontendDir = Join-Path $repoRoot "analytics-embed"
+$backendPython = Join-Path $backendDir ".venv\Scripts\python.exe"
 $port = 8000
 $healthUrl = "http://127.0.0.1:$port/api/health"
 
@@ -17,13 +18,17 @@ if (-not (Test-Path $frontendDir)) {
     Write-Error "Brak katalogu analytics-embed: $frontendDir"
     exit 1
 }
+if (-not (Test-Path $backendPython)) {
+    Write-Error "Brak interpretera venv backendu: $backendPython"
+    exit 1
+}
 
 Write-Host "Uruchamianie backendu (nowe okno PowerShell)..." -ForegroundColor Cyan
 Start-Process powershell -WorkingDirectory $backendDir -ArgumentList @(
     "-NoExit",
     "-NoProfile",
     "-Command",
-    "python -m uvicorn app.main:app --reload --port $port"
+    "& `"$backendPython`" -m uvicorn app.main:app --reload --port $port"
 )
 
 Write-Host "Oczekiwanie na backend ($healthUrl)..." -ForegroundColor Yellow

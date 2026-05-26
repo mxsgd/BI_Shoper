@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from ..database import get_db
 from ..models.store import Store
-from ..scheduler.jobs import run_sync_now
+from ..scheduler.jobs import get_sync_status, run_sync_now
 from ..services.shoper_auth import has_store_credentials
 
 router = APIRouter(prefix="/api/stores", tags=["stores"])
@@ -105,6 +105,15 @@ async def update_store_auth(store_id: int, body: StoreAuthUpdate, db: AsyncSessi
         "api_token_expires_at": str(store.api_token_expires_at) if store.api_token_expires_at else None,
         "api_token_updated_at": str(store.api_token_updated_at) if store.api_token_updated_at else None,
     }
+
+
+@router.get("/{store_id}/sync-status")
+async def store_sync_status(store_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Store).where(Store.id == store_id))
+    store = result.scalar_one_or_none()
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    return get_sync_status(store_id)
 
 
 @router.post("/sync-now")
