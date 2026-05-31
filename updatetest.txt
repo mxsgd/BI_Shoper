@@ -1,5 +1,0 @@
-code,price
-SELVA-1, 1179
-SELVA-2, 1245
-SELVA-3, 1345
-SELVA-4, 1461
