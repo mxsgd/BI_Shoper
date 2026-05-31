@@ -88,7 +88,7 @@ export default function Dashboard() {
       <FocusBanner
         selectedDate={selectedDate}
         onClear={clearSelection}
-        subtitle="KPI, tabele statusów/kanałów i metryki GA4 dotyczą wybranej daty."
+        subtitle="KPI i metryki GA4 dotyczą wybranej daty."
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -152,40 +152,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Wg statusu</h3>
-          <table className="w-full text-sm">
-            <thead><tr className="text-left text-slate-500"><th className="pb-2">Status</th><th className="pb-2 text-right">Zamówienia</th><th className="pb-2 text-right">Przychód</th></tr></thead>
-            <tbody>
-              {revenue.by_status.map((s) => (
-                <tr key={s.status} className="border-t border-slate-50">
-                  <td className="py-1.5">{s.status || "—"}</td>
-                  <td className="py-1.5 text-right">{s.orders}</td>
-                  <td className="py-1.5 text-right font-medium">{s.revenue.toLocaleString("pl-PL")} zł</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Kanały sprzedaży</h3>
-          {revenue.by_channel.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={revenue.by_channel} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                <YAxis type="category" dataKey="channel" tick={{ fontSize: 11 }} width={70} />
-                <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
-                <Bar dataKey="revenue" fill="#8b5cf6" radius={[0, 4, 4, 0]} name="Przychód" />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-slate-400">Brak danych o kanałach</p>
-          )}
-        </div>
-
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
           <h3 className="text-sm font-semibold text-slate-700 mb-3">Dodatkowe KPI</h3>
           <div className="space-y-3 text-sm">

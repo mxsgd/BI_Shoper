@@ -71,6 +71,7 @@ export interface RevenueData {
   time_series: RevenuePoint[];
   by_status: { status: string; orders: number; revenue: number }[];
   by_channel: { channel: string; orders: number; revenue: number }[];
+  by_category: { category: string; orders: number; revenue: number; quantity: number }[];
 }
 
 export interface TopProduct {
@@ -357,15 +358,32 @@ export interface PriceUpdateStats {
   failed: number;
   skipped: number;
   warning: number;
+  deactivated: number;
+  logs_total: number;
+  logs_in_memory?: number;
+  logs_dropped?: number;
+  log_seq?: number;
+  eta_seconds?: number | null;
+  current_row_number?: number | null;
+  current_code?: string | null;
+  current_phase?: string | null;
   success_rate: number;
   failure_rate: number;
   coverage_rate: number;
 }
 
+export type PriceUpdateTargetMode = "product" | "variant";
+export type PriceUpdateCsvDelimiter = "comma" | "semicolon" | "tab" | "pipe";
+export type PriceUpdateDeactivateScope = "file_products" | "all_store";
+
 export interface PriceUpdateJob {
   job_id: string;
   store_id?: number;
   file_name: string;
+  target_mode?: PriceUpdateTargetMode;
+  deactivate_missing?: boolean;
+  deactivate_scope?: PriceUpdateDeactivateScope;
+  csv_delimiter?: PriceUpdateCsvDelimiter;
   status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
   created_at: string;
   started_at?: string | null;
@@ -399,6 +417,8 @@ export interface PriceUpdateLogsResponse {
   per_page: number;
   total: number;
   pages: number;
+  logs_dropped?: number;
+  logs_in_memory?: number;
 }
 
 export interface StoreSyncStatus {
@@ -430,12 +450,28 @@ export const api = {
   syncNow: (scope: "all" | "orders" | "products" | "customers" | "reference" | "transform" = "all") =>
     post<Record<string, unknown>>("/stores/sync-now", { store_id: STORE_ID, scope }),
   getSyncStatus: () => get<StoreSyncStatus>(`/stores/${STORE_ID}/sync-status`),
-  createPriceUpdateJob: (file: File, duplicate_mode: "error" | "last_wins" = "error") => {
+  createPriceUpdateJob: (
+    file: File,
+    options: {
+      duplicate_mode?: "error" | "last_wins";
+      target_mode?: PriceUpdateTargetMode;
+      deactivate_missing?: boolean;
+      deactivate_scope?: PriceUpdateDeactivateScope;
+      csv_delimiter?: PriceUpdateCsvDelimiter;
+    } = {},
+  ) => {
     const form = new FormData();
     form.append("file", file);
-    return postForm<PriceUpdateJob>("/price-update/jobs", form, { duplicate_mode });
+    return postForm<PriceUpdateJob>("/price-update/jobs", form, {
+      duplicate_mode: options.duplicate_mode ?? "error",
+      target_mode: options.target_mode ?? "product",
+      deactivate_missing: options.deactivate_missing ? "true" : "false",
+      deactivate_scope: options.deactivate_scope ?? "all_store",
+      csv_delimiter: options.csv_delimiter ?? "semicolon",
+    });
   },
   getPriceUpdateJob: (jobId: string) => get<PriceUpdateJob>(`/price-update/jobs/${jobId}`),
+  getActivePriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/active"),
   getPriceUpdateLogs: (
     jobId: string,
     params: {
@@ -443,6 +479,7 @@ export const api = {
       query?: string;
       page?: number;
       per_page?: number;
+      tail?: number;
     } = {},
   ) => get<PriceUpdateLogsResponse>(`/price-update/jobs/${jobId}/logs`, params),
   getPriceUpdateLogsExportUrl: (jobId: string) => `${BASE}/price-update/jobs/${jobId}/logs/export.csv`,

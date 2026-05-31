@@ -201,7 +201,7 @@ async def revenue(
     store_id: int = Query(...),
     period: int = Query(30, ge=1, le=365),
     group_by: Literal["day", "week", "month"] = Query("day"),
-    focus_date: Optional[date] = Query(None, description="Scope by_status/by_channel to this day"),
+    focus_date: Optional[date] = Query(None, description="Scope by_status/by_channel/by_category to this day"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -266,6 +266,22 @@ async def revenue(
         channel_rows = (await db.execute(channel_sql, {
             "store_id": store_id, "focus_date": focus_date,
         })).all()
+        category_sql = text("""
+            SELECT
+                COALESCE(dc.category_name, 'Bez kategorii') AS category,
+                COUNT(DISTINCT foi.order_id) AS orders,
+                COALESCE(SUM(foi.total_gross), 0) AS revenue,
+                COALESCE(SUM(foi.quantity), 0) AS quantity
+            FROM fact_order_items foi
+            JOIN fact_orders fo ON fo.order_id = foi.order_id
+            LEFT JOIN dim_categories dc ON dc.category_id = foi.category_id
+            WHERE fo.store_id = :store_id AND fo.order_date::date = :focus_date
+            GROUP BY COALESCE(dc.category_name, 'Bez kategorii')
+            ORDER BY revenue DESC
+        """)
+        category_rows = (await db.execute(category_sql, {
+            "store_id": store_id, "focus_date": focus_date,
+        })).all()
     else:
         status_sql = text("""
             SELECT order_status, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
@@ -285,6 +301,22 @@ async def revenue(
             ORDER BY revenue DESC
         """)
         channel_rows = (await db.execute(channel_sql, {
+            "store_id": store_id, "since": cur_start,
+        })).all()
+        category_sql = text("""
+            SELECT
+                COALESCE(dc.category_name, 'Bez kategorii') AS category,
+                COUNT(DISTINCT foi.order_id) AS orders,
+                COALESCE(SUM(foi.total_gross), 0) AS revenue,
+                COALESCE(SUM(foi.quantity), 0) AS quantity
+            FROM fact_order_items foi
+            JOIN fact_orders fo ON fo.order_id = foi.order_id
+            LEFT JOIN dim_categories dc ON dc.category_id = foi.category_id
+            WHERE fo.store_id = :store_id AND fo.order_date::date >= :since
+            GROUP BY COALESCE(dc.category_name, 'Bez kategorii')
+            ORDER BY revenue DESC
+        """)
+        category_rows = (await db.execute(category_sql, {
             "store_id": store_id, "since": cur_start,
         })).all()
 
@@ -309,6 +341,15 @@ async def revenue(
         "by_channel": [
             {"channel": r.source_channel, "orders": r.orders, "revenue": round(float(r.revenue), 2)}
             for r in channel_rows
+        ],
+        "by_category": [
+            {
+                "category": r.category,
+                "orders": r.orders,
+                "revenue": round(float(r.revenue), 2),
+                "quantity": int(r.quantity),
+            }
+            for r in category_rows
         ],
     }
 

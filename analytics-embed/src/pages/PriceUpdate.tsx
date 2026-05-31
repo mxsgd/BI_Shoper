@@ -1,51 +1,251 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { PriceUpdateJob, PriceUpdateLogItem, PriceUpdateLogsResponse, PriceUpdateValidationError } from "../api";
+import type {
+  PriceUpdateJob,
+  PriceUpdateLogItem,
+  PriceUpdateLogsResponse,
+  PriceUpdateCsvDelimiter,
+  PriceUpdateDeactivateScope,
+  PriceUpdateTargetMode,
+  PriceUpdateValidationError,
+} from "../api";
+
+const CSV_DELIMITERS: { value: PriceUpdateCsvDelimiter; label: string }[] = [
+  { value: "semicolon", label: "Średnik (;) — Excel PL" },
+  { value: "comma", label: "Przecinek (,)" },
+  { value: "tab", label: "Tabulator" },
+  { value: "pipe", label: "Pionowa kreska (|)" },
+];
 
 const LOG_STATUSES = ["ALL", "SUCCESS", "ERROR", "WARNING", "SKIPPED"] as const;
 type LogFilter = (typeof LOG_STATUSES)[number];
 
+const STORAGE_KEY = "price_update_last_job_id";
+const SESSION_CACHE_KEY = "price_update_job_cache";
+
+function loadCachedJob(): PriceUpdateJob | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PriceUpdateJob;
+  } catch {
+    return null;
+  }
+}
+
+function persistJob(job: PriceUpdateJob | null) {
+  if (!job?.job_id) return;
+  localStorage.setItem(STORAGE_KEY, job.job_id);
+  try {
+    sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(job));
+  } catch {
+    /* quota */
+  }
+}
+
+function clearPersistedJob() {
+  localStorage.removeItem(STORAGE_KEY);
+  sessionStorage.removeItem(SESSION_CACHE_KEY);
+}
+
 export default function PriceUpdate() {
   const [file, setFile] = useState<File | null>(null);
+  const [targetMode, setTargetMode] = useState<PriceUpdateTargetMode>("product");
+  const [deactivateMissing, setDeactivateMissing] = useState(false);
+  const [deactivateScope, setDeactivateScope] = useState<PriceUpdateDeactivateScope>("file_products");
   const [duplicateMode, setDuplicateMode] = useState<"error" | "last_wins">("error");
+  const [csvDelimiter, setCsvDelimiter] = useState<PriceUpdateCsvDelimiter>("semicolon");
   const [creating, setCreating] = useState(false);
-  const [job, setJob] = useState<PriceUpdateJob | null>(null);
+  const [job, setJobState] = useState<PriceUpdateJob | null>(() => loadCachedJob());
   const [logs, setLogs] = useState<PriceUpdateLogsResponse | null>(null);
   const [statusFilter, setStatusFilter] = useState<LogFilter>("ALL");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(true);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
+  const jobRef = useRef<PriceUpdateJob | null>(null);
+
+  const setJob = useCallback((next: PriceUpdateJob | null) => {
+    jobRef.current = next;
+    setJobState(next);
+    if (next) persistJob(next);
+  }, []);
+
+  const fetchJobById = useCallback(async (jobId: string): Promise<PriceUpdateJob | null> => {
+    try {
+      return await api.getPriceUpdateJob(jobId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("404")) {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved === jobId) localStorage.removeItem(STORAGE_KEY);
+      }
+      return null;
+    }
+  }, []);
+
+  const reconnectJob = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setRestoring(true);
+    setReconnectError(null);
+    try {
+      // 1) Aktywny job na serwerze ma pierwszeństwo (RUNNING trwa mimo utraty localStorage)
+      const { job: active } = await api.getActivePriceUpdateJob();
+      if (active?.job_id) {
+        const full = await fetchJobById(active.job_id);
+        if (full) {
+          setJob(full);
+          return;
+        }
+        setJob(active as PriceUpdateJob);
+        return;
+      }
+
+      // 2) Ostatni zapisany job_id
+      const savedId = localStorage.getItem(STORAGE_KEY);
+      if (savedId) {
+        const j = await fetchJobById(savedId);
+        if (j) {
+          setJob(j);
+          return;
+        }
+      }
+
+      // 3) Cache sesji — tylko jeśli job nadal istnieje na serwerze
+      const cached = loadCachedJob();
+      if (cached?.job_id) {
+        const j = await fetchJobById(cached.job_id);
+        if (j) {
+          setJob(j);
+          return;
+        }
+        // Stary cache (np. RUNNING) po restarcie backendu — wyczyść
+        clearPersistedJob();
+        setJobState(null);
+        jobRef.current = null;
+      }
+    } catch (e) {
+      setReconnectError(e instanceof Error ? e.message : "Nie udało się połączyć z jobem");
+    } finally {
+      if (showSpinner) setRestoring(false);
+    }
+  }, [fetchJobById, setJob]);
+
+  // Przywróć / podłącz job (mount, powrót na zakładkę, focus okna)
+  useEffect(() => {
+    void reconnectJob(true);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reconnectJob(false);
+    };
+    const onFocus = () => void reconnectJob(false);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [reconnectJob]);
+
+  // Krótki retry po wejściu (np. job właśnie startuje) — bez nieskończonego pollingu
+  useEffect(() => {
+    if (job?.job_id) return;
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      if (attempts > 5) {
+        window.clearInterval(timer);
+        return;
+      }
+      void reconnectJob(false);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [job?.job_id, reconnectJob]);
 
   const validationErrors: PriceUpdateValidationError[] = job?.validation.errors ?? [];
   const canStart = !!file && !creating;
   const hasJob = !!job?.job_id;
+  const isVariantMode = targetMode === "variant";
 
-  useEffect(() => {
-    if (!job?.job_id) return;
-    if (job.status !== "RUNNING" && job.status !== "PENDING") return;
-    const timer = window.setInterval(async () => {
-      const next = await api.getPriceUpdateJob(job.job_id);
-      setJob(next);
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [job?.job_id, job?.status]);
+  const fetchLogsParams = useMemo(
+    () => ({
+      status: statusFilter,
+      query: search || undefined,
+      page,
+      per_page: 100,
+    }),
+    [statusFilter, search, page],
+  );
 
+  const isJobTerminal =
+    job?.status === "DONE" || job?.status === "FAILED" || job?.status === "CANCELLED";
+  const jobId = job?.job_id;
+  const jobRunning = job?.status === "RUNNING" || job?.status === "PENDING";
+
+  // Postęp — tylko lekki endpoint job (bez logów)
   useEffect(() => {
-    if (!job?.job_id) return;
+    if (!jobId || isJobTerminal) return;
     let alive = true;
-    api.getPriceUpdateLogs(job.job_id, { status: statusFilter, query: search || undefined, page, per_page: 100 }).then((resp) => {
-      if (!alive) return;
-      setLogs(resp);
-    });
+
+    async function refreshJob() {
+      try {
+        const nextJob = await api.getPriceUpdateJob(jobId);
+        if (alive) setJob(nextJob);
+      } catch {
+        /* retry */
+      }
+    }
+
+    void refreshJob();
+    const timer = window.setInterval(refreshJob, 2000);
     return () => {
       alive = false;
+      window.clearInterval(timer);
     };
-  }, [job?.job_id, statusFilter, search, page, job?.stats.processed]);
+  }, [jobId, isJobTerminal]);
+
+  // Logi — osobno; podczas RUNNING tylko ostatnie wpisy (tail)
+  useEffect(() => {
+    if (!jobId) return;
+    let alive = true;
+
+    async function refreshLogs() {
+      try {
+        const params = jobRunning
+          ? { ...fetchLogsParams, tail: 200, page: 1 }
+          : fetchLogsParams;
+        const nextLogs = await api.getPriceUpdateLogs(jobId, params);
+        if (alive) setLogs(nextLogs);
+      } catch {
+        /* retry */
+      }
+    }
+
+    void refreshLogs();
+    if (isJobTerminal) return () => {
+      alive = false;
+    };
+
+    const intervalMs = jobRunning ? 3000 : 5000;
+    const timer = window.setInterval(refreshLogs, intervalMs);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [jobId, isJobTerminal, jobRunning, fetchLogsParams]);
+
+  useEffect(() => {
+    if (!jobId || !isJobTerminal) return;
+    api.getPriceUpdateJob(jobId).then(setJob).catch(() => undefined);
+  }, [jobId, isJobTerminal]);
 
   const progressPct = useMemo(() => {
     if (!job) return 0;
+    if (job.status === "DONE" || job.status === "FAILED" || job.status === "CANCELLED") return 100;
     if (!job.stats.total) return 0;
-    return Math.min(100, (job.stats.processed / job.stats.total) * 100);
+    if (job.stats.processed >= job.stats.total && job.status === "RUNNING") {
+      return 95;
+    }
+    return Math.min(95, (job.stats.processed / job.stats.total) * 100);
   }, [job]);
 
   async function handleStart() {
@@ -53,8 +253,15 @@ export default function PriceUpdate() {
     setCreating(true);
     setError(null);
     setPage(1);
+    setLogs(null);
     try {
-      const created = await api.createPriceUpdateJob(file, duplicateMode);
+      const created = await api.createPriceUpdateJob(file, {
+        duplicate_mode: duplicateMode,
+        target_mode: targetMode,
+        deactivate_missing: deactivateMissing,
+        deactivate_scope: deactivateScope,
+        csv_delimiter: csvDelimiter,
+      });
       setJob(created);
       if (created.status === "FAILED" && created.validation.invalid_rows > 0) {
         setError("Walidacja CSV nie przeszła. Popraw błędy i uruchom ponownie.");
@@ -66,22 +273,74 @@ export default function PriceUpdate() {
     }
   }
 
+  function handleNewJob() {
+    setJobState(null);
+    jobRef.current = null;
+    setLogs(null);
+    setFile(null);
+    setError(null);
+    setReconnectError(null);
+    setPage(1);
+    clearPersistedJob();
+  }
+
   return (
     <div>
       <div className="mb-6">
-        <h2 className="text-2xl font-bold">Aktualizacja cen</h2>
-        <p className="text-sm text-slate-500">CSV po kodach produktów, postęp na żywo i logi operacji.</p>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-2xl font-bold">Aktualizacja cen</h2>
+          {hasJob && isJobTerminal && (
+            <button
+              type="button"
+              onClick={handleNewJob}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Nowy job
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-slate-500">
+          Plik CSV lub TXT po kodach {isVariantMode ? "wariantów" : "produktów"}, postęp na żywo i logi operacji.
+        </p>
       </div>
 
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">1) Upload i walidacja</h3>
+        <div className="flex flex-col items-center py-4 mb-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-4">Tryb aktualizacji</p>
+          <div className="inline-flex w-full max-w-md rounded-xl border border-slate-200 p-1 bg-slate-50">
+            <ModeSwitch
+              active={targetMode === "product"}
+              label="Produkty"
+              onClick={() => setTargetMode("product")}
+            />
+            <ModeSwitch
+              active={targetMode === "variant"}
+              label="Warianty"
+              onClick={() => setTargetMode("variant")}
+            />
+          </div>
+        </div>
+
+        <h3 className="text-sm font-semibold text-slate-700 mb-3 mt-2">1) Upload i walidacja</h3>
         <div className="flex flex-wrap items-center gap-3">
           <input
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.txt,.text,text/csv,text/plain"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="text-sm"
           />
+          <select
+            value={csvDelimiter}
+            onChange={(e) => setCsvDelimiter(e.target.value as PriceUpdateCsvDelimiter)}
+            className="rounded-md border border-slate-200 px-2 py-1.5 text-sm"
+            title="Separator kolumn w pliku CSV"
+          >
+            {CSV_DELIMITERS.map((d) => (
+              <option key={d.value} value={d.value}>
+                Separator: {d.label}
+              </option>
+            ))}
+          </select>
           <select
             value={duplicateMode}
             onChange={(e) => setDuplicateMode(e.target.value as "error" | "last_wins")}
@@ -100,9 +359,97 @@ export default function PriceUpdate() {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Wymagane kolumny: <code>code</code>, <code>price</code>. Opcjonalne: <code>currency</code>, <code>price_type</code>, <code>comment</code>.
+          Pliki <code>.csv</code> lub <code>.txt</code> z nagłówkiem. Wymagane kolumny: <code>code</code>, <code>price</code>. Opcjonalne:{" "}
+          <code>currency</code>, <code>price_type</code>, <code>comment</code>.
+          {isVariantMode ? (
+            <>
+              {" "}
+              W trybie wariantów <code>code</code> to kod wariantu. Ceny i aktywność są porównywane z API Shoper (nie z lokalnej bazy); job nic nie zapisuje do tabel produktów.
+            </>
+          ) : null}
         </p>
+
+        <div className="mt-5 pt-5 border-t border-slate-100">
+          <label className="flex items-start gap-3 text-sm text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={deactivateMissing}
+              onChange={(e) => setDeactivateMissing(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600"
+            />
+            <span>
+              <span className="font-medium">Dezaktywuj niewystępujące w pliku rekordy</span>
+              <span className="block text-xs text-slate-500 mt-1">
+                Po aktualizacji cen wyłączy w Shoper aktywne {isVariantMode ? "warianty" : "produkty"}, których kodu nie ma w CSV.
+              </span>
+            </span>
+          </label>
+          {deactivateMissing && isVariantMode ? (
+            <fieldset className="mt-4 ml-7 space-y-2 border-0 p-0">
+              <legend className="text-xs font-medium text-slate-600 mb-1">Zakres dezaktywacji wariantów</legend>
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="deactivateScope"
+                  checked={deactivateScope === "file_products"}
+                  onChange={() => setDeactivateScope("file_products")}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">Tylko produkty z pliku</span>
+                  <span className="block text-xs text-slate-500">
+                    Wyłączy brakujące warianty tylko u produktów, które mają choć jeden wiersz w pliku.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="radio"
+                  name="deactivateScope"
+                  checked={deactivateScope === "all_store"}
+                  onChange={() => setDeactivateScope("all_store")}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="font-medium">Cały sklep</span>
+                  <span className="block text-xs text-slate-500">
+                    Wyłączy wszystkie aktywne warianty w sklepie, których kodu nie ma w pliku.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+          ) : null}
+          {deactivateMissing && !isVariantMode ? (
+            <p className="mt-3 ml-7 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+              Uwaga: w trybie produktów dezaktywacja dotyczy wszystkich aktywnych produktów w sklepie, których kodu nie ma w pliku.
+            </p>
+          ) : null}
+          {deactivateMissing && isVariantMode && deactivateScope === "all_store" ? (
+            <p className="mt-3 ml-7 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+              Uwaga: zakres „cały sklep” może wyłączyć warianty u produktów spoza pliku.
+            </p>
+          ) : null}
+        </div>
+
         {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
+
+        {restoring && !hasJob ? (
+          <p className="mt-3 text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+            Szukam aktywnego joba na serwerze…
+          </p>
+        ) : null}
+
+        {reconnectError && !hasJob ? (
+          <p className="mt-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            {reconnectError}
+          </p>
+        ) : null}
+
+        {hasJob && (job?.status === "RUNNING" || job?.status === "PENDING") && reconnectError ? (
+          <p className="mt-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            {reconnectError} (pokazuję ostatni znany stan — odświeżam w tle)
+          </p>
+        ) : null}
 
         {validationErrors.length > 0 ? (
           <div className="mt-4 overflow-auto max-h-52 border border-rose-100 rounded-md">
@@ -132,6 +479,15 @@ export default function PriceUpdate() {
         <>
           <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
             <h3 className="text-sm font-semibold text-slate-700 mb-3">2) Postęp</h3>
+            <p className="text-xs text-slate-500 mb-2">
+              Tryb: {job.target_mode === "variant" ? "warianty" : "produkty"}
+              {job.deactivate_missing
+                ? ` · dezaktywacja (${job.deactivate_scope === "file_products" ? "produkty z pliku" : "cały sklep"})`
+                : ""}
+              {job.csv_delimiter
+                ? ` · separator: ${CSV_DELIMITERS.find((d) => d.value === job.csv_delimiter)?.label ?? job.csv_delimiter}`
+                : ""}
+            </p>
             <div className="w-full h-3 rounded-full bg-slate-100 overflow-hidden">
               <div
                 className="h-full bg-indigo-600 transition-all"
@@ -140,14 +496,38 @@ export default function PriceUpdate() {
             </div>
             <p className="mt-2 text-xs text-slate-500">
               Status: <span className="font-semibold">{job.status}</span> · {progressPct.toFixed(1)}%
+              {job.stats.logs_total != null ? ` · ${job.stats.logs_total} wpisów w logu` : ""}
+              {job.status === "RUNNING" && job.stats.eta_seconds != null
+                ? ` · ETA: ${fmtEta(job.stats.eta_seconds)}`
+                : ""}
+              {job.status === "RUNNING" && job.stats.processed >= job.stats.total
+                ? " · finalizacja produktów…"
+                : ""}
             </p>
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-4">
-              <Metric label="Total" value={job.stats.total} />
-              <Metric label="Processed" value={job.stats.processed} />
-              <Metric label="Success" value={job.stats.success} />
-              <Metric label="Failed" value={job.stats.failed} />
-              <Metric label="Skipped" value={job.stats.skipped} />
-              <Metric label="Success rate" value={`${job.stats.success_rate}%`} />
+            {jobRunning && job.stats.current_code ? (
+              <p className="mt-1 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-2 py-1">
+                Teraz: {fmtPhase(job.stats.current_phase)}
+                {job.stats.current_row_number
+                  ? ` · wiersz ${job.stats.current_row_number}/${job.stats.total}`
+                  : ""}
+                {" · "}
+                <span className="font-mono">{job.stats.current_code}</span>
+              </p>
+            ) : null}
+            {job.fatal_error ? (
+              <p className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2">
+                {job.fatal_error}
+              </p>
+            ) : null}
+            <div className="grid grid-cols-2 md:grid-cols-8 gap-3 mt-2">
+              <Metric label="Wierszy" value={job.stats.total} />
+              <Metric label="Przetworzono" value={job.stats.processed} />
+              <Metric label="Cena OK" value={job.stats.success} />
+              <Metric label="Błąd wiersza" value={job.stats.failed} />
+              <Metric label="Bez zmian" value={job.stats.skipped} />
+              <Metric label="Ostrzeżenia" value={job.stats.warning} />
+              <Metric label="Wyłączono" value={job.stats.deactivated ?? 0} />
+              <Metric label="Skuteczność" value={`${job.stats.success_rate}%`} />
             </div>
           </div>
 
@@ -198,7 +578,7 @@ export default function PriceUpdate() {
                 <tbody>
                   {(logs?.items ?? []).map((l: PriceUpdateLogItem) => (
                     <tr key={`${l.row_number}-${l.code}-${l.timestamp}`} className="border-t border-slate-100">
-                      <td className="py-1.5">{l.row_number}</td>
+                      <td className="py-1.5">{l.row_number || "—"}</td>
                       <td className="py-1.5 font-medium">{l.code}</td>
                       <td className="py-1.5 text-right">{l.old_price == null ? "—" : l.old_price.toFixed(2)}</td>
                       <td className="py-1.5 text-right">{l.new_price == null ? "—" : l.new_price.toFixed(2)}</td>
@@ -212,7 +592,9 @@ export default function PriceUpdate() {
 
             <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
               <span>
-                {logs ? `Strona ${logs.page}/${Math.max(logs.pages, 1)} · ${logs.total} wpisów` : "Brak logów"}
+                {logs
+                  ? `Strona ${logs.page}/${Math.max(logs.pages, 1)} · ${logs.total} wpisów łącznie`
+                  : "Brak logów"}
               </span>
               <div className="flex gap-2">
                 <button
@@ -237,6 +619,49 @@ export default function PriceUpdate() {
         </>
       ) : null}
     </div>
+  );
+}
+
+function fmtEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}min ${seconds % 60}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}h ${m}min`;
+}
+
+function fmtPhase(phase: string | null | undefined): string {
+  switch (phase) {
+    case "row":
+      return "aktualizacja wiersza";
+    case "post_process":
+      return "finalizacja produktu";
+    case "deactivate_store":
+      return "dezaktywacja sklepu";
+    default:
+      return phase ?? "…";
+  }
+}
+
+function ModeSwitch({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 px-6 py-3 text-base font-semibold rounded-lg transition-colors ${
+        active ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-800"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 

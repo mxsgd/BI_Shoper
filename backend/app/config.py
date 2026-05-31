@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     ga4_property_id: str = ""
     ga4_credentials_path: str = ""
+    ga4_sync_window_days: int = 90
 
     # Opcjonalny URL Postgresa z Railway (tabela `events` trackera) — sync → tracker_events_local przy starcie
     tracker_remote_database_url: str = ""
