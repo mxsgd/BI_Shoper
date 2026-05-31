@@ -21,7 +21,7 @@ DEFAULT_PER_PAGE = 100
 DEFAULT_TIMEOUT = 15.0
 MAX_RETRIES = 5
 RETRY_DELAY = 5.0
-RATE_DELAY = 0.35
+RATE_DELAY = 0.12
 
 
 class ShoperUnauthorizedError(RuntimeError):
@@ -219,13 +219,20 @@ class ShoperClient:
 
     async def put(self, endpoint: str, body: dict) -> Any:
         """PUT with retry logic."""
+        data, _ = await self.put_with_error(endpoint, body)
+        return data
+
+    async def put_with_error(self, endpoint: str, body: dict) -> tuple[Any | None, str | None]:
+        """PUT returning (response_json, error_message)."""
         client = await self._get_client()
         did_refresh = False
+        last_error: str | None = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:
+                await asyncio.sleep(RATE_DELAY)
                 r = await client.put(endpoint, json=body)
                 if r.status_code == 200:
-                    return r.json()
+                    return r.json(), None
                 if r.status_code == 401:
                     if not did_refresh and await self._refresh_token_once():
                         did_refresh = True
@@ -236,13 +243,16 @@ class ShoperClient:
                     wait = int(r.headers.get("Retry-After", RETRY_DELAY))
                     await asyncio.sleep(wait)
                     continue
-                logger.error("PUT %s -> %d: %s", endpoint, r.status_code, r.text[:300])
-                return None
+                last_error = f"HTTP {r.status_code}: {r.text[:400]}"
+                logger.error("PUT %s -> %s", endpoint, last_error)
+                return None, last_error
             except httpx.TimeoutException:
+                last_error = "Request timeout"
                 await asyncio.sleep(RETRY_DELAY)
             except ShoperUnauthorizedError:
                 raise
             except Exception as e:
+                last_error = str(e)
                 logger.error("Error PUT %s: %s", endpoint, e)
                 await asyncio.sleep(RETRY_DELAY)
-        return None
+        return None, last_error or "PUT failed after retries"

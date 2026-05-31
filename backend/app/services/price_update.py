@@ -3,25 +3,41 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import async_session
-from ..models.product import Product
+from ..models.raw.raw_product_stocks import RawProductStock
 from ..models.store import Store
-from .shoper_client import ShoperClient
-from .shoper_auth import ensure_store_token
+from .shoper_auth import ShoperAuthError, ensure_store_token
+from .shoper_client import ShoperClient, ShoperUnauthorizedError
 
 JobStatus = Literal["PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED"]
 LogStatus = Literal["SUCCESS", "ERROR", "SKIPPED", "WARNING"]
+TargetMode = Literal["product", "variant"]
+CsvDelimiter = Literal["comma", "semicolon", "tab", "pipe"]
+DeactivateScope = Literal["file_products", "all_store"]
 
-MAX_FILE_BYTES = 20 * 1024 * 1024
-MAX_ROWS = 50_000
+_DELIMITER_CHARS: dict[CsvDelimiter, str] = {
+    "comma": ",",
+    "semicolon": ";",
+    "tab": "\t",
+    "pipe": "|",
+}
+
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_ROWS = 500_000
+MAX_LOGS_IN_MEMORY = 5_000
+MAX_JOBS_IN_MEMORY = 3
+BULK_JOB_ROW_THRESHOLD = 500  # powyżej: bez logu per wiersz SKIPPED (cena bez zmian)
+DEFAULT_LOCALE = os.getenv("SHOPER_DEFAULT_LOCALE", "pl_PL")
 
 
 @dataclass
@@ -37,6 +53,8 @@ class PriceUpdateLogEntry:
     http_status: int | None = None
     request_id: str | None = None
     comment: str | None = None
+    product_id: int | None = None
+    stock_id: int | None = None
 
 
 @dataclass
@@ -62,6 +80,10 @@ class PriceUpdateJob:
     store_id: int
     file_name: str
     created_at: str
+    target_mode: TargetMode = "product"
+    deactivate_missing: bool = False
+    deactivate_scope: DeactivateScope = "all_store"
+    csv_delimiter: CsvDelimiter = "semicolon"
     status: JobStatus = "PENDING"
     started_at: str | None = None
     finished_at: str | None = None
@@ -71,10 +93,19 @@ class PriceUpdateJob:
     failed: int = 0
     skipped: int = 0
     warning: int = 0
+    deactivated: int = 0
     rows: list[PriceUpdateRow] = field(default_factory=list)
     logs: list[PriceUpdateLogEntry] = field(default_factory=list)
     validation_errors: list[ValidationError] = field(default_factory=list)
     fatal_error: str | None = None
+    codes_in_file: set[str] = field(default_factory=set)
+    product_ids_in_file: set[int] = field(default_factory=set)
+    log_seq: int = 0
+    logs_dropped: int = 0
+    started_at_ts: float | None = None  # unix timestamp do ETA
+    current_row_number: int | None = None
+    current_code: str | None = None
+    current_phase: str | None = None  # row | post_process | deactivate_store
 
 
 def _now_iso() -> str:
@@ -98,8 +129,12 @@ def _parse_csv_rows(
     csv_text: str,
     *,
     duplicate_mode: Literal["error", "last_wins"],
+    csv_delimiter: CsvDelimiter = "semicolon",
 ) -> tuple[list[PriceUpdateRow], list[ValidationError]]:
-    reader = csv.DictReader(io.StringIO(csv_text))
+    reader = csv.DictReader(
+        io.StringIO(csv_text),
+        delimiter=_DELIMITER_CHARS[csv_delimiter],
+    )
     headers = [h.strip() for h in (reader.fieldnames or []) if h]
     required = {"code", "price"}
     if not required.issubset(set(headers)):
@@ -158,6 +193,66 @@ def _parse_csv_rows(
     return rows, errors
 
 
+def _product_active_payload(active: bool, *, include_top_level: bool = False) -> dict:
+    """Top-level ``active`` on product może w Shoper aktywować wszystkie warianty — domyślnie tylko translations."""
+    payload: dict = {"translations": {DEFAULT_LOCALE: {"active": active}}}
+    if include_top_level:
+        payload["active"] = active
+    return payload
+
+
+def _stock_active_payload(active: bool, *, default: bool | None = None) -> dict:
+    payload: dict = {"active": active}
+    if default is not None:
+        payload["default"] = default
+    return payload
+
+
+def _shoper_bool(value) -> bool:
+    if value is True or value == 1 or value == "1":
+        return True
+    if value is False or value == 0 or value == "0":
+        return False
+    return bool(value)
+
+
+def _shoper_price(data: dict) -> float:
+    try:
+        return float(data.get("price") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _shoper_stock_id(data: dict) -> int:
+    return int(data.get("stock_id") or data.get("id") or 0)
+
+
+def _shoper_product_id(data: dict) -> int:
+    return int(data.get("product_id") or data.get("id") or 0)
+
+
+def _is_base_stock(live: dict) -> bool:
+    """Stock bazowy (nie extended) — Shoper nie pozwala wyłączyć go przez PUT /product-stocks.
+    
+    Shoper zwraca extended jako int (1/0) lub bool — używamy _shoper_bool, nie 'is True'.
+    """
+    return not _shoper_bool(live.get("extended"))
+
+
+def _response_request_id(response: object) -> str:
+    """Bezpieczne wyciąganie request_id z odpowiedzi Shoper PUT — może być int, dict lub None."""
+    if not isinstance(response, dict):
+        return ""
+    return str(response.get("request_id") or response.get("trace_id") or "")
+
+
+def _is_base_stock_api_error(api_err: str | None) -> bool:
+    if not api_err:
+        return False
+    low = api_err.lower()
+    return "stocka bazowego" in low or "stock bazowy" in low
+
+
 class PriceUpdateJobManager:
     def __init__(self):
         self._jobs: dict[str, PriceUpdateJob] = {}
@@ -170,25 +265,41 @@ class PriceUpdateJobManager:
         file_name: str,
         csv_bytes: bytes,
         duplicate_mode: Literal["error", "last_wins"] = "error",
+        target_mode: TargetMode = "product",
+        deactivate_missing: bool = False,
+        deactivate_scope: DeactivateScope = "all_store",
+        csv_delimiter: CsvDelimiter = "semicolon",
     ) -> PriceUpdateJob:
         if len(csv_bytes) > MAX_FILE_BYTES:
             raise ValueError(f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB)")
         text = csv_bytes.decode("utf-8-sig", errors="replace")
-        rows, validation_errors = _parse_csv_rows(text, duplicate_mode=duplicate_mode)
+        rows, validation_errors = _parse_csv_rows(
+            text,
+            duplicate_mode=duplicate_mode,
+            csv_delimiter=csv_delimiter,
+        )
         if len(rows) > MAX_ROWS:
             raise ValueError(f"Too many rows (max {MAX_ROWS})")
+        if target_mode == "product":
+            deactivate_scope = "all_store"
 
         job = PriceUpdateJob(
             job_id=f"job_{uuid.uuid4().hex[:12]}",
             store_id=store_id,
             file_name=file_name or "upload.csv",
             created_at=_now_iso(),
+            target_mode=target_mode,
+            deactivate_missing=deactivate_missing,
+            deactivate_scope=deactivate_scope,
+            csv_delimiter=csv_delimiter,
             rows=rows,
             total=len(rows),
             validation_errors=validation_errors,
+            codes_in_file={r.code for r in rows},
         )
         async with self._lock:
             self._jobs[job.job_id] = job
+            self._prune_old_jobs()
 
         if validation_errors:
             job.status = "FAILED"
@@ -202,6 +313,122 @@ class PriceUpdateJobManager:
         async with self._lock:
             return self._jobs.get(job_id)
 
+    async def get_active_job(self, store_id: int) -> PriceUpdateJob | None:
+        async with self._lock:
+            active = [
+                j
+                for j in self._jobs.values()
+                if j.store_id == store_id and j.status in ("PENDING", "RUNNING")
+            ]
+            if not active:
+                return None
+            active.sort(key=lambda j: j.started_at or j.created_at, reverse=True)
+            return active[0]
+
+    def _set_progress(
+        self,
+        job: PriceUpdateJob,
+        *,
+        phase: str,
+        code: str | None = None,
+        row_number: int | None = None,
+    ) -> None:
+        job.current_phase = phase
+        job.current_code = code
+        job.current_row_number = row_number
+
+    def _clear_progress(self, job: PriceUpdateJob) -> None:
+        job.current_phase = None
+        job.current_code = None
+        job.current_row_number = None
+
+    def _prune_old_jobs(self) -> None:
+        """Usuń tylko zakończone joby — RUNNING/PENDING nigdy nie kasujemy."""
+        terminal = ("DONE", "FAILED", "CANCELLED")
+        finished = [
+            (jid, j)
+            for jid, j in self._jobs.items()
+            if j.status in terminal
+        ]
+        # Zachowaj wszystkie aktywne + max N ostatnich zakończonych
+        active_count = sum(1 for j in self._jobs.values() if j.status not in terminal)
+        max_finished = max(0, MAX_JOBS_IN_MEMORY - active_count)
+        if len(finished) <= max_finished:
+            return
+        finished.sort(key=lambda x: x[1].finished_at or x[1].created_at)
+        while len(finished) > max_finished:
+            jid, _ = finished.pop(0)
+            if jid in self._jobs and self._jobs[jid].status in terminal:
+                del self._jobs[jid]
+
+    async def _fetch_live_stock(self, client: ShoperClient, stock_id: int) -> dict | None:
+        raw = await client.get_raw(f"/product-stocks/{stock_id}")
+        if isinstance(raw, dict) and _shoper_stock_id(raw):
+            return raw
+        return None
+
+    async def _fetch_live_product(self, client: ShoperClient, product_id: int) -> dict | None:
+        raw = await client.get_raw(f"/products/{product_id}")
+        if isinstance(raw, dict):
+            pid = _shoper_product_id(raw)
+            if pid or raw.get("code") is not None:
+                return raw
+        return None
+
+    async def _resolve_stock_live(
+        self,
+        client: ShoperClient,
+        db: AsyncSession,
+        store_id: int,
+        code: str,
+    ) -> dict | None:
+        """Kod → stan w Shoper (API). Lokalna DB tylko jako indeks stock_id, jeśli filtr API zawiedzie."""
+        items = await client.get_filtered("/product-stocks", {"code": code})
+        for item in items:
+            if (item.get("code") or "").strip() == code:
+                return item
+        if items:
+            return items[0]
+
+        row = await self._get_stock_by_code(db, store_id, code)
+        if row is None:
+            return None
+        return await self._fetch_live_stock(client, int(row.stock_id))
+
+    async def _resolve_product_live(
+        self,
+        client: ShoperClient,
+        db: AsyncSession,
+        store_id: int,
+        code: str,
+    ) -> tuple[dict | None, dict | None]:
+        """Zwraca (produkt, opcjonalny stock bazowy) — dane wyłącznie z API Shoper."""
+        items = await client.get_filtered("/products", {"code": code})
+        for item in items:
+            if (item.get("code") or "").strip() == code:
+                product_id = _shoper_product_id(item)
+                if product_id:
+                    live = await self._fetch_live_product(client, product_id)
+                    return live or item, None
+
+        base_row = await self._get_base_stock(db, store_id, code)
+        if base_row is None:
+            return None, None
+        stock_live = await self._fetch_live_stock(client, int(base_row.stock_id))
+        if stock_live is None:
+            return None, None
+        product_id = _shoper_product_id(stock_live)
+        if not product_id:
+            return None, stock_live
+        product_live = await self._fetch_live_product(client, product_id)
+        return product_live, stock_live
+
+    async def _list_live_stocks_for_product(
+        self, client: ShoperClient, product_id: int
+    ) -> list[dict]:
+        items = await client.get_filtered("/product-stocks", {"product_id": product_id})
+        return [i for i in items if isinstance(i, dict)]
+
     async def _run_job(self, job_id: str) -> None:
         job = await self.get_job(job_id)
         if job is None:
@@ -209,9 +436,14 @@ class PriceUpdateJobManager:
 
         job.status = "RUNNING"
         job.started_at = _now_iso()
+        job.started_at_ts = datetime.now(timezone.utc).timestamp()
 
         async with async_session() as db:
-            store = (await db.execute(select(Store).where(Store.id == job.store_id, Store.is_active.is_(True)))).scalar_one_or_none()
+            store = (
+                await db.execute(
+                    select(Store).where(Store.id == job.store_id, Store.is_active.is_(True))
+                )
+            ).scalar_one_or_none()
             if not store:
                 job.status = "FAILED"
                 job.finished_at = _now_iso()
@@ -219,86 +451,909 @@ class PriceUpdateJobManager:
                 return
 
             async def _refresh_token() -> str:
-                token = await ensure_store_token(db, store, force_refresh=True)
+                # Osobna sesja DB — commit przy /auth nie psuje zapytań w trakcie joba.
+                async with async_session() as refresh_db:
+                    store_row = (
+                        await refresh_db.execute(
+                            select(Store).where(
+                                Store.id == job.store_id, Store.is_active.is_(True)
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if store_row is None:
+                        raise ShoperAuthError("Store not found during token refresh")
+                    token = await ensure_store_token(
+                        refresh_db, store_row, force_refresh=True
+                    )
+                store.api_token = token
                 client.set_token(token)
                 return token
 
             client = ShoperClient(store.api_url, store.api_token, on_unauthorized=_refresh_token)
+            product_min_in_file: dict[int, tuple[str, float]] = {}
             try:
-                for row in job.rows:
-                    await self._process_row(db, client, job, row)
-                await db.commit()
+                if job.target_mode == "variant":
+                    last_product_id: int | None = None
+                    post_processed: set[int] = set()
+
+                    for row in job.rows:
+                        self._set_progress(
+                            job, phase="row", code=row.code, row_number=row.row_number
+                        )
+                        try:
+                            row_pid = await self._process_variant_row(
+                                db, client, job, row, product_min_in_file
+                            )
+                        except (ShoperUnauthorizedError, ShoperAuthError):
+                            raise
+                        except Exception as exc:
+                            await self._log_row_crash(job, row, exc)
+                            row_pid = None
+
+                        # Streaming: gdy produkt się zmienia, natychmiast post-procesuj poprzedni
+                        if row_pid is not None and last_product_id is not None and row_pid != last_product_id:
+                            if last_product_id not in post_processed:
+                                code = product_min_in_file.get(last_product_id, ("", 0))[0] or f"id={last_product_id}"
+                                self._set_progress(job, phase="post_process", code=code)
+                                try:
+                                    await self._post_process_single_product(
+                                        client, job, last_product_id, product_min_in_file
+                                    )
+                                except (ShoperUnauthorizedError, ShoperAuthError):
+                                    raise
+                                post_processed.add(last_product_id)
+                        if row_pid is not None:
+                            last_product_id = row_pid
+
+                    # Post-process ostatniego produktu i tych które (rzadki przypadek) nie były zgrupowane
+                    for product_id in job.product_ids_in_file:
+                        if product_id not in post_processed:
+                            code = product_min_in_file.get(product_id, ("", 0))[0] or f"id={product_id}"
+                            self._set_progress(job, phase="post_process", code=code)
+                            try:
+                                await self._post_process_single_product(
+                                    client, job, product_id, product_min_in_file
+                                )
+                            except (ShoperUnauthorizedError, ShoperAuthError):
+                                raise
+                            except Exception as exc:
+                                await self._log_post_process_crash(
+                                    job, exc, label=f"post-process produkt {product_id}"
+                                )
+
+                    if job.deactivate_missing and job.deactivate_scope == "all_store":
+                        self._set_progress(job, phase="deactivate_store", code="cały sklep")
+                        try:
+                            await self._deactivate_products_not_in_file(client, job)
+                        except (ShoperUnauthorizedError, ShoperAuthError):
+                            raise
+                        except Exception as exc:
+                            await self._log_post_process_crash(
+                                job, exc, label="dezaktywacja produktów spoza pliku (cały sklep)"
+                            )
+                else:
+                    for row in job.rows:
+                        self._set_progress(
+                            job, phase="row", code=row.code, row_number=row.row_number
+                        )
+                        try:
+                            await self._process_product_row(db, client, job, row)
+                        except (ShoperUnauthorizedError, ShoperAuthError):
+                            raise
+                        except Exception as exc:
+                            await self._log_row_crash(job, row, exc)
+                    if job.deactivate_missing:
+                        self._set_progress(job, phase="deactivate_store", code="cały sklep")
+                        try:
+                            await self._deactivate_missing_products(client, job)
+                        except (ShoperUnauthorizedError, ShoperAuthError):
+                            raise
+                        except Exception as exc:
+                            await self._log_post_process_crash(
+                                job, exc, label="dezaktywacja produktów"
+                            )
+
                 job.status = "DONE"
+            except (ShoperUnauthorizedError, ShoperAuthError) as exc:
+                job.status = "FAILED"
+                job.fatal_error = f"Autoryzacja Shoper: {exc}"
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code="", price=0),
+                    old_price=None,
+                    status="ERROR",
+                    message=str(exc),
+                )
             except Exception as exc:
                 job.status = "FAILED"
                 job.fatal_error = str(exc)
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code="", price=0),
+                    old_price=None,
+                    status="ERROR",
+                    message=f"Krytyczny błąd joba: {exc}",
+                )
             finally:
                 job.finished_at = _now_iso()
+                self._clear_progress(job)
+                job.rows = []
+                job.codes_in_file = set()
                 await client.close()
 
-    async def _process_row(self, db, client: ShoperClient, job: PriceUpdateJob, row: PriceUpdateRow) -> None:
-        product = (
-            await db.execute(
-                select(Product).where(
-                    Product.store_id == job.store_id,
-                    Product.code == row.code,
-                ).limit(1)
-            )
-        ).scalars().first()
+    async def _log_row_crash(
+        self, job: PriceUpdateJob, row: PriceUpdateRow, exc: Exception
+    ) -> None:
+        await self._add_log(
+            job,
+            row=row,
+            old_price=None,
+            status="ERROR",
+            message=f"Nieobsłużony błąd wiersza: {exc}",
+        )
+        job.processed += 1
+        job.failed += 1
 
-        if not product:
+    async def _log_post_process_crash(
+        self, job: PriceUpdateJob, exc: Exception, *, label: str = "operacje po wierszach"
+    ) -> None:
+        await self._add_log(
+            job,
+            row=PriceUpdateRow(row_number=0, code="", price=0),
+            old_price=None,
+            status="ERROR",
+            message=f"Błąd ({label}): {exc}",
+        )
+        job.warning += 1
+
+    async def _ensure_product_active(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_id: int,
+        *,
+        log_code: str,
+    ) -> bool:
+        live = await self._fetch_live_product(client, product_id)
+        if live is not None and _shoper_bool(live.get("active")):
+            return False
+
+        response, api_err = await client.put_with_error(
+            f"/products/{product_id}",
+            _product_active_payload(True),
+        )
+        if response is None:
             await self._add_log(
                 job,
-                row=row,
+                row=PriceUpdateRow(row_number=0, code=log_code, price=0),
                 old_price=None,
-                status="SKIPPED",
-                message="Product code not found",
-                http_status=404,
+                status="ERROR",
+                message=f"Nie udało się aktywować produktu (product_id={product_id}): {api_err or 'unknown'}",
+                product_id=product_id,
             )
-            job.processed += 1
-            job.skipped += 1
-            return
+            job.warning += 1
+            return False
 
-        old_price = float(product.price or 0)
-        if abs(old_price - row.price) < 0.000001:
-            await self._add_log(
-                job,
-                row=row,
-                old_price=old_price,
-                status="SKIPPED",
-                message="Price unchanged",
-                http_status=200,
-            )
-            job.processed += 1
-            job.skipped += 1
-            return
+        await self._add_log(
+            job,
+            row=PriceUpdateRow(row_number=0, code=log_code, price=0),
+            old_price=None,
+            status="SUCCESS",
+            message=f"Produkt aktywowany w Shoper (product_id={product_id})",
+            http_status=200,
+            product_id=product_id,
+        )
+        return True
 
-        payload = {"price": row.price}
-        response = await client.put(f"/products/{product.shoper_product_id}", payload)
+    async def _ensure_stock_active(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        live: dict,
+        row: PriceUpdateRow,
+    ) -> bool:
+        if _shoper_bool(live.get("active")):
+            return False
+
+        stock_id = _shoper_stock_id(live)
+        product_id = _shoper_product_id(live)
+        old_price = _shoper_price(live)
+        response, api_err = await client.put_with_error(
+            f"/product-stocks/{stock_id}",
+            _stock_active_payload(True),
+        )
         if response is None:
             await self._add_log(
                 job,
                 row=row,
                 old_price=old_price,
                 status="ERROR",
-                message="Shoper API update failed",
+                message=f"Nie udało się aktywować wariantu: {api_err or 'unknown'}",
+                product_id=product_id,
+                stock_id=stock_id,
             )
-            job.processed += 1
-            job.failed += 1
-            return
+            job.warning += 1
+            return False
 
-        product.price = row.price
         await self._add_log(
             job,
             row=row,
             old_price=old_price,
             status="SUCCESS",
-            message="Price updated",
+            message="Wariant aktywowany w Shoper",
             http_status=200,
-            request_id=str(response.get("request_id") or response.get("trace_id") or ""),
+            product_id=product_id,
+            stock_id=stock_id,
+        )
+        return True
+
+    async def _process_product_row(
+        self, db: AsyncSession, client: ShoperClient, job: PriceUpdateJob, row: PriceUpdateRow
+    ) -> None:
+        product_live, stock_live = await self._resolve_product_live(
+            client, db, job.store_id, row.code
+        )
+        if product_live is None:
+            await self._add_log(
+                job,
+                row=row,
+                old_price=None,
+                status="SKIPPED",
+                message="Product code not found in Shoper",
+                http_status=404,
+            )
+            job.processed += 1
+            job.skipped += 1
+            return
+
+        product_id = _shoper_product_id(product_live)
+        stock_id = _shoper_stock_id(stock_live) if stock_live else None
+        old_price = _shoper_price(product_live)
+
+        job.product_ids_in_file.add(product_id)
+        await self._ensure_product_active(client, job, product_id, log_code=row.code)
+
+        if abs(old_price - row.price) < 0.000001:
+            if self._should_log_skipped_row(job, "Price unchanged (Shoper)"):
+                await self._add_log(
+                    job,
+                    row=row,
+                    old_price=old_price,
+                    status="SKIPPED",
+                    message="Price unchanged (Shoper)",
+                    http_status=200,
+                    product_id=product_id,
+                    stock_id=stock_id,
+                )
+            job.processed += 1
+            job.skipped += 1
+            return
+
+        response, api_err = await client.put_with_error(
+            f"/products/{product_id}",
+            {**_product_active_payload(True), "price": row.price},
+        )
+        if response is None:
+            await self._add_log(
+                job,
+                row=row,
+                old_price=old_price,
+                status="ERROR",
+                message=f"Shoper API product update failed: {api_err or 'unknown'}",
+                product_id=product_id,
+                stock_id=stock_id,
+            )
+            job.processed += 1
+            job.failed += 1
+            return
+
+        await self._add_log(
+            job,
+            row=row,
+            old_price=old_price,
+            status="SUCCESS",
+            message="Product price updated in Shoper",
+            http_status=200,
+            request_id=_response_request_id(response),
+            product_id=product_id,
+            stock_id=stock_id,
         )
         job.processed += 1
         job.success += 1
+
+    async def _process_variant_row(
+        self,
+        db: AsyncSession,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        row: PriceUpdateRow,
+        product_min_in_file: dict[int, tuple[str, float]],
+    ) -> int | None:
+        """Zwraca product_id jeśli wiersz zostal przetworzony, None jeśli nie znaleziono."""
+        live = await self._resolve_stock_live(client, db, job.store_id, row.code)
+        if live is None:
+            await self._add_log(
+                job,
+                row=row,
+                old_price=None,
+                status="SKIPPED",
+                message="Variant code not found in Shoper",
+                http_status=404,
+            )
+            job.processed += 1
+            job.skipped += 1
+            return None
+
+        product_id = _shoper_product_id(live)
+        stock_id = _shoper_stock_id(live)
+        job.product_ids_in_file.add(product_id)
+        old_price = _shoper_price(live)
+
+        await self._ensure_stock_active(client, job, live, row)
+
+        if abs(old_price - row.price) < 0.000001:
+            if self._should_log_skipped_row(job, "Price unchanged (Shoper)"):
+                await self._add_log(
+                    job,
+                    row=row,
+                    old_price=old_price,
+                    status="SKIPPED",
+                    message="Price unchanged (Shoper)",
+                    http_status=200,
+                    product_id=product_id,
+                    stock_id=stock_id,
+                )
+            job.processed += 1
+            job.skipped += 1
+        else:
+            response, api_err = await client.put_with_error(
+                f"/product-stocks/{stock_id}",
+                {**_stock_active_payload(True), "price": row.price},
+            )
+            if response is None:
+                await self._add_log(
+                    job,
+                    row=row,
+                    old_price=old_price,
+                    status="ERROR",
+                    message=f"Shoper API variant update failed: {api_err or 'unknown'}",
+                    product_id=product_id,
+                    stock_id=stock_id,
+                )
+                job.processed += 1
+                job.failed += 1
+            else:
+                await self._add_log(
+                    job,
+                    row=row,
+                    old_price=old_price,
+                    status="SUCCESS",
+                    message="Variant price updated in Shoper",
+                    http_status=200,
+                    request_id=_response_request_id(response),
+                    product_id=product_id,
+                    stock_id=stock_id,
+                )
+                job.processed += 1
+                job.success += 1
+
+        current = product_min_in_file.get(product_id)
+        if current is None or row.price < current[1]:
+            product_min_in_file[product_id] = (row.code, row.price)
+
+        return product_id
+
+    async def _post_process_single_product(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_id: int,
+        product_min_in_file: dict[int, tuple[str, float]],
+    ) -> None:
+        """Post-process jednego produktu: cena bazowego stocku + cena produktu + aktywacja + wyłączenie off-file wariantów."""
+        cheapest_code = product_min_in_file.get(product_id, (None, 0))[0] or ""
+        try:
+            await self._apply_single_product_price(client, job, product_id, product_min_in_file)
+        except (ShoperUnauthorizedError, ShoperAuthError):
+            raise
+        except Exception as exc:
+            await self._log_post_process_crash(job, exc, label=f"cena produktu {product_id}")
+        try:
+            await self._promote_default_to_file_variant(client, job, product_id, product_min_in_file)
+        except (ShoperUnauthorizedError, ShoperAuthError):
+            raise
+        except Exception as exc:
+            await self._log_post_process_crash(job, exc, label=f"default wariant {product_id}")
+        try:
+            await self._ensure_product_active(client, job, product_id, log_code=cheapest_code)
+        except (ShoperUnauthorizedError, ShoperAuthError):
+            raise
+        except Exception as exc:
+            await self._log_post_process_crash(job, exc, label=f"aktywacja {product_id}")
+        try:
+            await self._deactivate_variants_not_in_file_for_product(
+                client, job, product_id, product_min_in_file, reason="po aktywacji"
+            )
+        except (ShoperUnauthorizedError, ShoperAuthError):
+            raise
+        except Exception as exc:
+            await self._log_post_process_crash(job, exc, label=f"dezaktywacja off-file {product_id}")
+
+    async def _apply_single_product_price(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_id: int,
+        product_min_in_file: dict[int, tuple[str, float]],
+    ) -> None:
+        """Ustaw cenę stocku bazowego i produktu na min. cenę wariantów z pliku."""
+        entry = product_min_in_file.get(product_id)
+        if entry is None:
+            return
+        cheapest_code, min_price = entry
+        await self._apply_product_prices_from_variants(
+            client, job, {product_id: (cheapest_code, min_price)}
+        )
+
+    async def _apply_product_prices_from_variants(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_min_in_file: dict[int, tuple[str, float]],
+    ) -> None:
+        """Ustaw cenę produktu i stocku bazowego na min. cenę wariantów z pliku.
+
+        Shoper dla produktów z wariantami wyświetla min(ceny aktywnych stocków) — samo ustawienie
+        products.price nie zmienia widocznej ceny. Musimy też zaktualizować stock bazowy (extended=false).
+        """
+        for product_id, (cheapest_code, min_price) in product_min_in_file.items():
+            # --- stock bazowy (extended=false) → jego cena jest wyświetlana na stronie ---
+            stocks = await self._list_live_stocks_for_product(client, product_id)
+            base_stock = next(
+                (s for s in stocks if isinstance(s, dict) and not _shoper_bool(s.get("extended"))),
+                None,
+            )
+            if base_stock is not None:
+                base_id = _shoper_stock_id(base_stock)
+                base_old_price = _shoper_price(base_stock)
+                if base_id and abs(base_old_price - min_price) > 0.000001:
+                    resp, err = await client.put_with_error(
+                        f"/product-stocks/{base_id}",
+                        {"price": min_price},
+                    )
+                    if resp is None:
+                        await self._add_log(
+                            job,
+                            row=PriceUpdateRow(row_number=0, code=cheapest_code, price=min_price),
+                            old_price=base_old_price,
+                            status="WARNING",
+                            message=(
+                                f"Nie udało się ustawić ceny stocku bazowego product_id={product_id} "
+                                f"na {min_price:.2f}: {err or 'unknown'}"
+                            ),
+                            product_id=product_id,
+                            stock_id=base_id,
+                        )
+                        job.warning += 1
+                    else:
+                        await self._add_log(
+                            job,
+                            row=PriceUpdateRow(row_number=0, code=cheapest_code, price=min_price),
+                            old_price=base_old_price,
+                            status="SUCCESS",
+                            message=(
+                                f"Cena stocku bazowego = {min_price:.2f} "
+                                f"(najniższa z pliku, wariant {cheapest_code})"
+                            ),
+                            http_status=200,
+                            product_id=product_id,
+                            stock_id=base_id,
+                        )
+
+            # --- products.price — aktualizujemy dla spójności (listingi, API) ---
+            live = await self._fetch_live_product(client, product_id)
+            old_price = _shoper_price(live) if live else None
+            if live is not None and abs(old_price - min_price) < 0.000001:
+                continue
+            response, api_err = await client.put_with_error(
+                f"/products/{product_id}",
+                {"price": min_price},
+            )
+            if response is None:
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code=cheapest_code, price=min_price),
+                    old_price=old_price,
+                    status="WARNING",
+                    message=(
+                        f"Nie udało się ustawić ceny produktu product_id={product_id} "
+                        f"na {min_price:.2f}: {api_err or 'unknown'}"
+                    ),
+                    product_id=product_id,
+                )
+                job.warning += 1
+                continue
+            await self._add_log(
+                job,
+                row=PriceUpdateRow(row_number=0, code=cheapest_code, price=min_price),
+                old_price=old_price,
+                status="SUCCESS",
+                message=(
+                    f"Cena produktu w Shoper = {min_price:.2f} "
+                    f"— najniższa z pliku (wariant {cheapest_code})"
+                ),
+                http_status=200,
+                product_id=product_id,
+            )
+
+    async def _promote_default_to_file_variant(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_id: int,
+        product_min_in_file: dict[int, tuple[str, float]],
+    ) -> None:
+        """Ustaw domyślny wariant na ten z pliku, gdy bazowy stock nie jest w CSV."""
+        preferred = product_min_in_file.get(product_id, (None, 0))[0]
+        if not preferred:
+            return
+        stocks = await self._list_live_stocks_for_product(client, product_id)
+        has_base_off_file = any(
+            _is_base_stock(s)
+            and (s.get("code") or "").strip()
+            and (s.get("code") or "").strip() not in job.codes_in_file
+            for s in stocks
+            if isinstance(s, dict)
+        )
+        if not has_base_off_file:
+            return
+        replacement = await self._find_replacement_default_stock(
+            client, job, product_id, preferred
+        )
+        if replacement is None:
+            return
+        rep_code = (replacement.get("code") or "").strip()
+        rep_id = _shoper_stock_id(replacement)
+        _, err = await client.put_with_error(
+            f"/product-stocks/{rep_id}",
+            _stock_active_payload(True, default=True),
+        )
+        if err:
+            await self._add_log(
+                job,
+                row=PriceUpdateRow(row_number=0, code=rep_code, price=0),
+                old_price=_shoper_price(replacement),
+                status="WARNING",
+                message=f"Nie udało się ustawić domyślnego wariantu na {rep_code}: {err}",
+                product_id=product_id,
+                stock_id=rep_id,
+            )
+            job.warning += 1
+            return
+        await self._add_log(
+            job,
+            row=PriceUpdateRow(row_number=0, code=rep_code, price=0),
+            old_price=_shoper_price(replacement),
+            status="SUCCESS",
+            message=(
+                f"Domyślny wariant ustawiony na {rep_code} (produkt ma stock bazowy spoza pliku)"
+            ),
+            product_id=product_id,
+            stock_id=rep_id,
+        )
+
+    async def _deactivate_stock_variant(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        live: dict,
+        product_min_in_file: dict[int, tuple[str, float]],
+        *,
+        log_label: str,
+        skip_refetch: bool = False,
+    ) -> None:
+        code = (live.get("code") or "").strip()
+        if not code or code in job.codes_in_file:
+            return
+
+        product_id = _shoper_product_id(live)
+        stock_id = _shoper_stock_id(live)
+        if not skip_refetch:
+            fresh = await self._fetch_live_stock(client, stock_id)
+            if fresh is not None:
+                live = fresh
+        old_price = _shoper_price(live)
+
+        if _is_base_stock(live):
+            # Nie powinno tu trafić — base stock filtrujemy wyżej. Cicha ochrona.
+            return
+
+        if _shoper_bool(live.get("default")):
+            preferred = product_min_in_file.get(product_id, (None, 0))[0]
+            replacement = await self._find_replacement_default_stock(
+                client, job, product_id, preferred
+            )
+            if replacement is None:
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code=code, price=0),
+                    old_price=old_price,
+                    status="ERROR",
+                    message=(
+                        f"Nie można wyłączyć domyślnego wariantu '{code}' — "
+                        "brak wariantu z pliku do ustawienia jako domyślny"
+                    ),
+                    product_id=product_id,
+                    stock_id=stock_id,
+                )
+                job.warning += 1
+                return
+            rep_id = _shoper_stock_id(replacement)
+            _, rep_err = await client.put_with_error(
+                f"/product-stocks/{rep_id}",
+                _stock_active_payload(True, default=True),
+            )
+            if rep_err:
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code=code, price=0),
+                    old_price=old_price,
+                    status="ERROR",
+                    message=f"Nie udało się zmienić domyślnego wariantu przed wyłączeniem '{code}': {rep_err}",
+                    product_id=product_id,
+                    stock_id=stock_id,
+                )
+                job.warning += 1
+                return
+
+        response, api_err = await client.put_with_error(
+            f"/product-stocks/{stock_id}",
+            _stock_active_payload(False, default=False),
+        )
+        if response is None:
+            await self._add_log(
+                job,
+                row=PriceUpdateRow(row_number=0, code=code, price=0),
+                old_price=old_price,
+                status="WARNING",
+                message=f"Nie udało się wyłączyć wariantu ({log_label}): {api_err or 'unknown'}",
+                product_id=product_id,
+                stock_id=stock_id,
+            )
+            job.warning += 1
+            return
+
+        await self._add_log(
+            job,
+            row=PriceUpdateRow(row_number=0, code=code, price=0),
+            old_price=old_price,
+            status="SUCCESS",
+            message=f"Wariant rozszerzony wyłączony w Shoper ({log_label})",
+            http_status=200,
+            product_id=product_id,
+            stock_id=stock_id,
+        )
+        job.deactivated += 1
+
+    async def _deactivate_variants_not_in_file_for_product(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_id: int,
+        product_min_in_file: dict[int, tuple[str, float]],
+        *,
+        reason: str,
+    ) -> None:
+        """Wyłącz warianty rozszerzone (extended=True) spoza pliku. Stock bazowy ignorujemy — jego aktywność sterowana jest przez translację produktu."""
+        all_stocks = await self._list_live_stocks_for_product(client, product_id)
+
+        # Interesują nas tylko warianty rozszerzone — base stock pomijamy całkowicie
+        extended = [s for s in all_stocks if isinstance(s, dict) and _shoper_bool(s.get("extended"))]
+        off_file = [
+            (s.get("code") or "").strip()
+            for s in extended
+            if (s.get("code") or "").strip() and (s.get("code") or "").strip() not in job.codes_in_file
+        ]
+
+        if not off_file and not extended:
+            return
+
+        await self._add_log(
+            job,
+            row=PriceUpdateRow(row_number=0, code=off_file[0] if off_file else "", price=0),
+            old_price=None,
+            status="SUCCESS",
+            message=(
+                f"[{reason}] product_id={product_id}: "
+                f"{len(extended)} wariantów rozszerzonych, "
+                f"do wyłączenia (spoza pliku): {len(off_file)}"
+                + (f" ({', '.join(off_file[:8])}{'…' if len(off_file) > 8 else ''})" if off_file else "")
+            ),
+            product_id=product_id,
+        )
+
+        for live in extended:
+            c = (live.get("code") or "").strip()
+            if not c or c in job.codes_in_file:
+                continue
+            # live pochodzi z _list_live_stocks_for_product (świeże dane) — nie re-fetchujemy
+            await self._deactivate_stock_variant(
+                client,
+                job,
+                live,
+                product_min_in_file,
+                log_label=f"brak w pliku — {reason}",
+                skip_refetch=True,
+            )
+
+    async def _deactivate_products_not_in_file(
+        self, client: ShoperClient, job: PriceUpdateJob
+    ) -> None:
+        """Tryb variant + all_store: dezaktywuj produkty których żaden wariant nie jest w pliku.
+        
+        Używamy product_ids_in_file (product_id Shopera), nie codes_in_file — bo plik zawiera
+        kody wariantów, a nie kody produktów nadrzędnych.
+        """
+        products = await client.get_all("/products")
+        for product_live in products:
+            if not isinstance(product_live, dict):
+                continue
+            product_id = _shoper_product_id(product_live)
+            if not product_id:
+                continue
+            if product_id in job.product_ids_in_file:
+                # Ten produkt ma warianty w pliku — nie ruszamy
+                continue
+            if not _shoper_bool(product_live.get("active")):
+                # Już nieaktywny
+                continue
+            code = (product_live.get("code") or "").strip() or f"product_id={product_id}"
+            old_price = _shoper_price(product_live)
+            response, api_err = await client.put_with_error(
+                f"/products/{product_id}",
+                _product_active_payload(False, include_top_level=True),
+            )
+            if response is None:
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code=code, price=0),
+                    old_price=old_price,
+                    status="WARNING",
+                    message=f"Nie udało się wyłączyć produktu spoza pliku: {api_err or 'unknown'}",
+                    product_id=product_id,
+                )
+                job.warning += 1
+                continue
+            await self._add_log(
+                job,
+                row=PriceUpdateRow(row_number=0, code=code, price=0),
+                old_price=old_price,
+                status="SUCCESS",
+                message="Produkt wyłączony w Shoper (brak wariantów w pliku — cały sklep)",
+                http_status=200,
+                product_id=product_id,
+            )
+            job.deactivated += 1
+
+    async def _deactivate_missing_products(
+        self, client: ShoperClient, job: PriceUpdateJob
+    ) -> None:
+        """Tryb product + all_store: dezaktywuj produkty których kod nie jest w pliku."""
+        products = await client.get_all("/products")
+        for product_live in products:
+            if not isinstance(product_live, dict):
+                continue
+            code = (product_live.get("code") or "").strip()
+            if not code or code in job.codes_in_file:
+                continue
+            if not _shoper_bool(product_live.get("active")):
+                continue
+            product_id = _shoper_product_id(product_live)
+            if not product_id:
+                continue
+            old_price = _shoper_price(product_live)
+            response, api_err = await client.put_with_error(
+                f"/products/{product_id}",
+                _product_active_payload(False, include_top_level=True),
+            )
+            if response is None:
+                await self._add_log(
+                    job,
+                    row=PriceUpdateRow(row_number=0, code=code, price=0),
+                    old_price=old_price,
+                    status="ERROR",
+                    message=f"Failed to deactivate product not in file: {api_err or 'unknown'}",
+                    product_id=product_id,
+                )
+                job.warning += 1
+                continue
+            await self._add_log(
+                job,
+                row=PriceUpdateRow(row_number=0, code=code, price=0),
+                old_price=old_price,
+                status="SUCCESS",
+                message="Product deactivated in Shoper (not in file)",
+                http_status=200,
+                product_id=product_id,
+            )
+            job.deactivated += 1
+
+    async def _find_replacement_default_stock(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_id: int,
+        preferred_code: str | None,
+    ) -> dict | None:
+        if preferred_code:
+            items = await client.get_filtered(
+                "/product-stocks",
+                {"product_id": product_id, "code": preferred_code},
+            )
+            for item in items:
+                if (item.get("code") or "").strip() == preferred_code:
+                    return item
+
+        for code in sorted(job.codes_in_file):
+            items = await client.get_filtered(
+                "/product-stocks",
+                {"product_id": product_id, "code": code},
+            )
+            for item in items:
+                if (item.get("code") or "").strip() == code:
+                    return item
+        return None
+
+    async def _deactivate_missing_variants(
+        self,
+        client: ShoperClient,
+        job: PriceUpdateJob,
+        product_min_in_file: dict[int, tuple[str, float]],
+    ) -> None:
+        stocks = await client.get_all("/product-stocks")
+        scope_label = (
+            "products from file"
+            if job.deactivate_scope == "file_products"
+            else "entire store"
+        )
+        for live in stocks:
+            if not isinstance(live, dict):
+                continue
+            product_id = _shoper_product_id(live)
+            if job.deactivate_scope == "file_products" and product_id not in job.product_ids_in_file:
+                continue
+            await self._deactivate_stock_variant(
+                client,
+                job,
+                live,
+                product_min_in_file,
+                log_label=f"dezaktywacja — {scope_label}",
+            )
+
+    async def _get_base_stock(
+        self, db: AsyncSession, store_id: int, code: str
+    ) -> RawProductStock | None:
+        return (
+            await db.execute(
+                select(RawProductStock).where(
+                    RawProductStock.store_id == store_id,
+                    RawProductStock.code == code,
+                    or_(RawProductStock.extended.is_(False), RawProductStock.extended.is_(None)),
+                ).limit(1)
+            )
+        ).scalars().first()
+
+    async def _get_stock_by_code(
+        self, db: AsyncSession, store_id: int, code: str
+    ) -> RawProductStock | None:
+        return (
+            await db.execute(
+                select(RawProductStock).where(
+                    RawProductStock.store_id == store_id,
+                    RawProductStock.code == code,
+                ).limit(1)
+            )
+        ).scalars().first()
 
     async def _add_log(
         self,
@@ -310,6 +1365,8 @@ class PriceUpdateJobManager:
         message: str,
         http_status: int | None = None,
         request_id: str | None = None,
+        product_id: int | None = None,
+        stock_id: int | None = None,
     ) -> None:
         entry = PriceUpdateLogEntry(
             timestamp=_now_iso(),
@@ -317,14 +1374,27 @@ class PriceUpdateJobManager:
             row_number=row.row_number,
             code=row.code,
             old_price=old_price,
-            new_price=row.price,
+            new_price=row.price if row.price > 0 else None,
             status=status,
             message=message,
             http_status=http_status,
             request_id=request_id or None,
             comment=row.comment,
+            product_id=product_id,
+            stock_id=stock_id,
         )
         job.logs.append(entry)
+        job.log_seq += 1
+        overflow = len(job.logs) - MAX_LOGS_IN_MEMORY
+        if overflow > 0:
+            del job.logs[:overflow]
+            job.logs_dropped += overflow
+
+    def _should_log_skipped_row(self, job: PriceUpdateJob, message: str) -> bool:
+        """Duże pliki: nie zapisuj tysięcy identycznych SKIPPED w pamięci."""
+        if job.total < BULK_JOB_ROW_THRESHOLD:
+            return True
+        return "Price unchanged" not in message
 
 
 price_update_jobs = PriceUpdateJobManager()

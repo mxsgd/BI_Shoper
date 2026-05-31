@@ -257,28 +257,18 @@ async def transform_core():
 
 
 async def run_ga4_sync() -> dict:
-    """Pull GA4 data for today and yesterday into raw_ga4_* tables."""
+    """Pobierz GA4: każdy brakujący dzień w oknie + odśwież dziś/wczoraj."""
     async with async_session() as db:
         try:
             svc = GA4SyncService(db)
-            today = datetime.now(timezone.utc).date()
-            yesterday = today - timedelta(days=1)
-            yesterday_result = await svc.sync_day(yesterday)
-            today_result = await svc.sync_day(today)
-            return {
-                "ok": bool(yesterday_result.get("ok")) and bool(today_result.get("ok")),
-                "dates": {
-                    str(yesterday): yesterday_result,
-                    str(today): today_result,
-                },
-            }
+            return await svc.sync_missing_days()
         except Exception as e:
             logger.error("GA4 sync failed: %s", e)
             return {"ok": False, "error": str(e)}
 
 
 async def run_ga4_backfill() -> dict:
-    """Backfill last 90 days of GA4 data if tables are empty."""
+    """Uzupełnij historyczne dane GA4 (okno domyślnie 90 dni)."""
     async with async_session() as db:
         try:
             svc = GA4SyncService(db)

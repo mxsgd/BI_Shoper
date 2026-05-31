@@ -11,6 +11,22 @@ The project combines:
 
 This repository is both a working product prototype and a portfolio-style engineering project focused on data ingestion, analytics modeling, and dashboard UX.
 
+## Panel Preview
+
+Embedded analytics panel for Shoper store admins — React dashboard inside the Shoper admin iframe:
+
+| Dashboard | Orders |
+| :---: | :---: |
+| ![Dashboard — KPI overview and revenue trends](docs/DashboardScreen.png) | ![Orders — revenue, status and category breakdown](docs/ZamowieniaScreen.png) |
+
+| Customers | Traffic |
+| :---: | :---: |
+| ![Customers — segments and top buyers](docs/KlienciScreen.png) | ![Traffic — GA4 funnel and sessions vs orders](docs/RuchScreen.png) |
+
+| Trends | Price updates |
+| :---: | :---: |
+| ![Trends — seasonality and weekday patterns](docs/TrendyScreen.png) | ![Price updates — CSV bulk update with live progress](docs/AktualizacjaCenScreen.png) |
+
 ## What It Does
 
 - Pulls commerce data from the Shoper REST API into a local PostgreSQL warehouse
@@ -76,7 +92,7 @@ graph TD
 backend/            FastAPI app, sync services, analytics routes, DB models
 analytics-embed/    React dashboard embedded in Shoper admin
 tracker/            Tracker-related code and event pipeline work
-docs/               Product notes, architecture docs, and specs
+docs/               Product notes, architecture docs, panel screenshots, and specs
 PLAN.md             High-level architecture and data model notes
 PRICE_UPDATE_PANEL_SPEC.md
 ```

@@ -114,20 +114,70 @@ class GA4SyncService:
             logger.warning("GA4 sync for %s completed with errors: %s", date_str, errors)
         else:
             logger.info("GA4 sync for %s: %s", date_str, counts)
-        return {"ok": True, "date": date_str, "errors": errors, **counts}
+        return {"ok": len(errors) == 0, "date": date_str, "errors": errors, **counts}
+
+    async def _existing_dates(self, start: date, end: date) -> set[date]:
+        result = await self.db.execute(
+            text("SELECT date FROM raw_ga4_traffic WHERE date >= :start AND date <= :end"),
+            {"start": start, "end": end},
+        )
+        return {row.date for row in result}
+
+    async def sync_missing_days(self, window_days: int | None = None) -> dict:
+        """Pobierz z GA4 każdy brakujący dzień w oknie + odśwież dziś i wczoraj."""
+        parts = _get_ga4_client()
+        if parts[0] is None:
+            logger.warning("GA4 not configured (GA4_PROPERTY_ID / GA4_CREDENTIALS_PATH missing)")
+            return {"ok": False, "reason": "ga4_not_configured"}
+
+        settings = get_settings()
+        window = window_days if window_days is not None else settings.ga4_sync_window_days
+        window = max(1, min(window, 365))
+
+        today = date.today()
+        start = today - timedelta(days=window - 1)
+        existing = await self._existing_dates(start, today)
+
+        to_sync: set[date] = set()
+        d = start
+        while d <= today:
+            if d not in existing:
+                to_sync.add(d)
+            d += timedelta(days=1)
+        # GA4 bywa opóźnione — zawsze odśwież ostatnie 2 dni
+        to_sync.add(today)
+        to_sync.add(today - timedelta(days=1))
+
+        dates_sorted = sorted(to_sync)
+        if not dates_sorted:
+            return {"ok": True, "window_days": window, "dates_synced": 0, "dates": {}}
+
+        logger.info(
+            "GA4 sync: %d day(s) in window (missing=%d, refresh today/yesterday)",
+            len(dates_sorted),
+            len(dates_sorted) - min(2, len(dates_sorted)),
+        )
+
+        results: dict[str, dict] = {}
+        errors: list[str] = []
+        for target in dates_sorted:
+            day_result = await self.sync_day(target)
+            results[str(target)] = day_result
+            if not day_result.get("ok"):
+                errors.append(str(target))
+
+        return {
+            "ok": len(errors) == 0,
+            "window_days": window,
+            "dates_synced": len(dates_sorted),
+            "missing_before": window - len(existing),
+            "dates": results,
+            "errors": errors,
+        }
 
     async def backfill(self, days: int = 90) -> dict:
-        """Pull historical GA4 data when tables are empty."""
-        result = await self.db.execute(text("SELECT COUNT(*) FROM raw_ga4_traffic"))
-        if (result.scalar() or 0) > 0:
-            return {"ok": True, "skipped": True, "reason": "data_exists"}
-
-        results = []
-        for i in range(days, 0, -1):
-            d = date.today() - timedelta(days=i)
-            r = await self.sync_day(d)
-            results.append(r)
-        return {"ok": True, "days_synced": len(results)}
+        """Pierwsze wypełnienie okna — sync_missing_days dogra wszystkie brakujące dni."""
+        return await self.sync_missing_days(window_days=days)
 
     async def _sync_traffic(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                             FilterExpression, Filter, date_str, target_date):
@@ -139,9 +189,6 @@ class GA4SyncService:
                 "bounceRate", "averageSessionDuration", "engagedSessions", "eventCount",
             ]
         )
-        if not response.rows:
-            return 0
-        row = response.rows[0]
         sql = text("""
             INSERT INTO raw_ga4_traffic (date, sessions, total_users, new_users, page_views,
                 bounce_rate, avg_session_duration, engaged_sessions, events_count)
@@ -153,6 +200,16 @@ class GA4SyncService:
                 bounce_rate = EXCLUDED.bounce_rate, avg_session_duration = EXCLUDED.avg_session_duration,
                 engaged_sessions = EXCLUDED.engaged_sessions, events_count = EXCLUDED.events_count
         """)
+        if not response.rows:
+            await self.db.execute(sql, {
+                "date": target_date,
+                "sessions": 0, "total_users": 0, "new_users": 0, "page_views": 0,
+                "bounce_rate": 0.0, "avg_session_duration": 0.0,
+                "engaged_sessions": 0, "events_count": 0,
+            })
+            await self.db.commit()
+            return 1
+        row = response.rows[0]
         await self.db.execute(sql, {
             "date": target_date,
             "sessions": _val(row, 0, True), "total_users": _val(row, 1, True),

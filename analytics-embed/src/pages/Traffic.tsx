@@ -52,8 +52,8 @@ export default function Traffic() {
         <div className="mt-8 bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
           <p className="text-amber-800 font-medium">Brak danych GA4</p>
           <p className="text-sm text-amber-600 mt-1">
-            Ustaw GA4_PROPERTY_ID i GA4_CREDENTIALS_PATH w .env, a następnie uruchom synchronizację
-            (POST /api/stores/sync-now z scope="ga4").
+            Ustaw GA4_PROPERTY_ID i GA4_CREDENTIALS_PATH w backend/.env, zrestartuj serwer
+            (sync uzupełnia brakujące dni z ostatnich 90 dni) lub kliknij „Odśwież” w menu.
           </p>
         </div>
       </div>
