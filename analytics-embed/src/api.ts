@@ -358,7 +358,7 @@ export interface PriceUpdateStats {
   failed: number;
   skipped: number;
   warning: number;
-  deactivated: number;
+  deactivated_variants: number;
   logs_total: number;
   logs_in_memory?: number;
   logs_dropped?: number;
@@ -374,15 +374,12 @@ export interface PriceUpdateStats {
 
 export type PriceUpdateTargetMode = "product" | "variant";
 export type PriceUpdateCsvDelimiter = "comma" | "semicolon" | "tab" | "pipe";
-export type PriceUpdateDeactivateScope = "file_products" | "all_store";
 
 export interface PriceUpdateJob {
   job_id: string;
   store_id?: number;
   file_name: string;
   target_mode?: PriceUpdateTargetMode;
-  deactivate_missing?: boolean;
-  deactivate_scope?: PriceUpdateDeactivateScope;
   csv_delimiter?: PriceUpdateCsvDelimiter;
   status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
   created_at: string;
@@ -432,6 +429,92 @@ export interface StoreSyncStatus {
   already_running?: boolean;
 }
 
+// ─── Variant Code Generator ────────────────────────────────────────────────
+
+export interface VariantGroup {
+  group_id: number;
+  name: string;
+  product_count: number;
+}
+
+export interface VariantProduct {
+  product_id: number;
+  code: string;
+  name: string;
+  group_id: number | null;
+}
+
+export interface VariantStock {
+  stock_id: number;
+  code: string;
+  active: boolean | null;
+  extended: boolean | null;
+  price: number;
+}
+
+// ─── Option detection ──────────────────────────────────────────────────────
+
+export interface DetectedOptionValue {
+  value_id: string;
+  value_name: string;
+  suggested_suffix: string;
+}
+
+export interface DetectedOptionGroup {
+  group_id: string;
+  role: "size" | "fabric" | "other";
+  values: DetectedOptionValue[];
+}
+
+export interface DetectOptionsResult {
+  groups: DetectedOptionGroup[];
+  total_stocks: number;
+}
+
+// ─── Apply codes job ───────────────────────────────────────────────────────
+
+export interface OptionValueMapping {
+  value_id: string;
+  suffix: string;
+}
+
+export interface OptionGroupConfig {
+  group_id: string;
+  role: string;
+  values: OptionValueMapping[];
+}
+
+export interface ApplyCodesRequest {
+  store_id: number;
+  product_ids: number[];
+  option_groups: OptionGroupConfig[];
+  prices: Record<string, number>;
+  create_missing: boolean;
+}
+
+export interface ApplyCodesJob {
+  status: "running" | "done";
+  total: number;
+  done: number;
+  ok: number;
+  skip: number;
+  err: number;
+  log: string[];
+}
+
+export interface CreateVariantStocksRequest {
+  store_id: number;
+  products: { product_id: number; code: string }[];
+  segments: { name: string; values: string[] }[];
+  default_price: number;
+  skip_existing: boolean;
+}
+
+export interface CreateVariantStocksResult {
+  results: { code: string; status: "created" | "skipped" | "error"; message?: string; stock_id?: number }[];
+  summary: { created: number; skipped: number; errors: number; total: number };
+}
+
 export const api = {
   overview: (period = 30, focusDate?: string) =>
     get<OverviewData>("/analytics/overview", { period, focus_date: focusDate || undefined }),
@@ -447,7 +530,7 @@ export const api = {
     get<TrafficData>("/analytics/traffic", { period, focus_date: focusDate || undefined }),
   cart: (period = 30) => get<CartData>("/analytics/cart", { period }),
   tracker: (period = 7) => get<TrackerEventSummary>("/analytics/tracker", { period }),
-  syncNow: (scope: "all" | "orders" | "products" | "customers" | "reference" | "transform" = "all") =>
+  syncNow: (scope: "quick" | "all" | "orders" | "products" | "customers" | "reference" | "transform" | "ga4" = "quick") =>
     post<Record<string, unknown>>("/stores/sync-now", { store_id: STORE_ID, scope }),
   getSyncStatus: () => get<StoreSyncStatus>(`/stores/${STORE_ID}/sync-status`),
   createPriceUpdateJob: (
@@ -455,8 +538,6 @@ export const api = {
     options: {
       duplicate_mode?: "error" | "last_wins";
       target_mode?: PriceUpdateTargetMode;
-      deactivate_missing?: boolean;
-      deactivate_scope?: PriceUpdateDeactivateScope;
       csv_delimiter?: PriceUpdateCsvDelimiter;
     } = {},
   ) => {
@@ -465,8 +546,6 @@ export const api = {
     return postForm<PriceUpdateJob>("/price-update/jobs", form, {
       duplicate_mode: options.duplicate_mode ?? "error",
       target_mode: options.target_mode ?? "product",
-      deactivate_missing: options.deactivate_missing ? "true" : "false",
-      deactivate_scope: options.deactivate_scope ?? "all_store",
       csv_delimiter: options.csv_delimiter ?? "semicolon",
     });
   },
@@ -483,4 +562,20 @@ export const api = {
     } = {},
   ) => get<PriceUpdateLogsResponse>(`/price-update/jobs/${jobId}/logs`, params),
   getPriceUpdateLogsExportUrl: (jobId: string) => `${BASE}/price-update/jobs/${jobId}/logs/export.csv`,
+
+  // Variant code generator
+  getVariantGroups: () =>
+    get<VariantGroup[]>("/variant-codes/groups"),
+  searchVariantProducts: (params: { q?: string; group_id?: number; limit?: number } = {}) =>
+    get<VariantProduct[]>("/variant-codes/search-products", params),
+  getProductVariantStocks: (productId: number) =>
+    get<VariantStock[]>(`/variant-codes/products/${productId}/stocks`),
+  detectOptions: (productId: number) =>
+    get<DetectOptionsResult>("/variant-codes/detect-options", { product_id: productId }),
+  startApplyCodes: (body: ApplyCodesRequest) =>
+    post<{ job_id: string }>("/variant-codes/apply-codes/start", body),
+  getApplyCodesJob: (jobId: string) =>
+    get<ApplyCodesJob>(`/variant-codes/apply-codes/jobs/${jobId}`),
+  createVariantStocks: (body: CreateVariantStocksRequest) =>
+    post<CreateVariantStocksResult>("/variant-codes/create-stocks", body),
 };

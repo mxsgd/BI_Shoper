@@ -9,6 +9,7 @@ import Retention from "./pages/Retention";
 import Traffic from "./pages/Traffic";
 import Cart from "./pages/Cart";
 import PriceUpdate from "./pages/PriceUpdate";
+import VariantCodes from "./pages/VariantCodes";
 import { usePageView } from "./usePageView";
 import { api } from "./api";
 
@@ -22,11 +23,13 @@ const NAV = [
   { to: "/traffic", label: "Ruch", icon: "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
   { to: "/cart", label: "Koszyk", icon: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" },
   { to: "/price-update", label: "Aktualizacja cen", icon: "M12 4v16m8-8H4" },
+  { to: "/variant-codes", label: "Kody wariantów", icon: "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" },
 ];
 
 function Sidebar() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [syncDone, setSyncDone] = useState(false);
   const sawRunningSync = useRef(false);
 
   useEffect(() => {
@@ -43,6 +46,7 @@ function Sidebar() {
         if (running) {
           sawRunningSync.current = true;
           setRefreshError(null);
+          setSyncDone(false);
           return;
         }
 
@@ -54,35 +58,36 @@ function Sidebar() {
 
         if (sawRunningSync.current && status.status === "done") {
           sawRunningSync.current = false;
-          window.location.reload();
+          setSyncDone(true);
+          // Reload page after short delay so user sees the "done" message first
+          window.setTimeout(() => window.location.reload(), 1500);
         }
       } catch {
-        if (!disposed) {
-          setIsRefreshing(false);
-        }
+        if (!disposed) setIsRefreshing(false);
       }
     }
 
     void loadSyncStatus();
-    const timer = window.setInterval(() => {
-      void loadSyncStatus();
-    }, 3000);
-
+    const timer = window.setInterval(() => void loadSyncStatus(), 3000);
     return () => {
       disposed = true;
       window.clearInterval(timer);
     };
   }, []);
 
-  async function handleRefresh() {
+  const [showFullSync, setShowFullSync] = useState(false);
+
+  async function handleRefresh(scope: "quick" | "all" = "quick") {
     if (isRefreshing) return;
     setRefreshError(null);
+    setSyncDone(false);
     setIsRefreshing(true);
+    setShowFullSync(false);
     try {
-      await api.syncNow("all");
-      window.location.reload();
+      await api.syncNow(scope);
+      // Sync started in background — polling will detect when it finishes
     } catch (e) {
-      setRefreshError(e instanceof Error ? e.message : "Nie udało sie odswiezyc danych.");
+      setRefreshError(e instanceof Error ? e.message : "Nie udało się odświeżyć danych.");
       setIsRefreshing(false);
     }
   }
@@ -95,18 +100,67 @@ function Sidebar() {
             <h1 className="text-lg font-bold tracking-tight">BI Shoper</h1>
             <p className="text-xs text-slate-400 mt-0.5">Analityka sklepu</p>
           </div>
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="inline-flex items-center gap-1 rounded-md border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            title="Pobierz najnowsze dane"
-          >
-            {isRefreshing ? "Sync..." : "Odswiez"}
-          </button>
+          <div className="relative">
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => void handleRefresh("quick")}
+                disabled={isRefreshing}
+                className="inline-flex items-center gap-1 rounded-l-md border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Szybkie odświeżenie — tylko nowe zamówienia + transform (sekundy)"
+              >
+                {isRefreshing ? (
+                  <>
+                    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Sync...
+                  </>
+                ) : "Odśwież"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowFullSync((v) => !v)}
+                disabled={isRefreshing}
+                className="inline-flex items-center rounded-r-md border border-l-0 border-slate-600 px-1 py-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                title="Więcej opcji synchronizacji"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </div>
+            {showFullSync && !isRefreshing && (
+              <div className="absolute right-0 top-full mt-1 z-20 bg-slate-800 border border-slate-600 rounded-lg shadow-xl w-52 py-1 text-[11px]">
+                <div className="px-3 py-1.5 text-slate-400 font-semibold uppercase tracking-wide text-[10px]">
+                  Synchronizacja
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh("quick")}
+                  className="w-full text-left px-3 py-2 text-slate-200 hover:bg-slate-700 transition-colors"
+                >
+                  <p className="font-medium">Szybka (zamówienia)</p>
+                  <p className="text-slate-400 text-[10px] mt-0.5">Tylko nowe zamówienia + transform — sekundy</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh("all")}
+                  className="w-full text-left px-3 py-2 text-slate-200 hover:bg-slate-700 transition-colors"
+                >
+                  <p className="font-medium">Pełna synchronizacja</p>
+                  <p className="text-slate-400 text-[10px] mt-0.5">Wszystko od nowa — może trwać kilka minut</p>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         {refreshError ? (
           <p className="mt-2 text-[11px] text-rose-300">{refreshError}</p>
+        ) : syncDone ? (
+          <p className="mt-2 text-[11px] text-emerald-400">Synchronizacja zakończona ✓</p>
+        ) : isRefreshing ? (
+          <p className="mt-2 text-[11px] text-slate-400">Pobieranie nowych zamówień…</p>
         ) : null}
       </div>
       <nav className="flex-1 py-4 space-y-1 px-3">
@@ -154,6 +208,7 @@ export default function App() {
           <Route path="/traffic" element={<Traffic />} />
           <Route path="/cart" element={<Cart />} />
           <Route path="/price-update" element={<PriceUpdate />} />
+          <Route path="/variant-codes" element={<VariantCodes />} />
         </Routes>
       </main>
     </div>

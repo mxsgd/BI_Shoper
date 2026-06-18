@@ -6,6 +6,7 @@ from .raw_customers import RawCustomer
 from .raw_payments import RawPayment
 from .raw_shipments import RawShipping
 from .raw_categories import RawCategory
+from .raw_product_groups import RawProductGroup
 from .raw_discounts import RawDiscount
 from .raw_statuses import RawStatus
 from .raw_producers import RawProducer
@@ -31,6 +32,7 @@ __all__ = [
     "RawPayment",
     "RawShipping",
     "RawCategory",
+    "RawProductGroup",
     "RawDiscount",
     "RawStatus",
     "RawProducer",

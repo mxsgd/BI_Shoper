@@ -1,3 +1,4 @@
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -43,7 +44,7 @@ class SyncNowBody(BaseModel):
     """Trigger the same sync logic as the background scheduler."""
 
     store_id: int | None = None
-    scope: Literal["all", "orders", "products", "customers", "reference", "transform"] = "all"
+    scope: Literal["all", "quick", "orders", "products", "customers", "reference", "transform", "ga4"] = "quick"
 
 
 @router.get("/")
@@ -122,8 +123,8 @@ async def sync_now(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Run sync immediately for all active stores, or one store if `store_id` is set.
-    `scope`: `all` (orders + products + customers), or a single phase.
+    Kick off sync in the background and return immediately.
+    The client can poll /sync-status to track progress.
     """
     if body.store_id is not None:
         res = await db.execute(select(Store).where(Store.id == body.store_id))
@@ -133,7 +134,12 @@ async def sync_now(
         if not store.is_active:
             raise HTTPException(status_code=400, detail="Store is inactive")
 
-    return await run_sync_now(store_id=body.store_id, scope=body.scope)
+    status = get_sync_status(body.store_id)
+    if status.get("status") == "running":
+        return {"already_running": True, **status}
+
+    asyncio.create_task(run_sync_now(store_id=body.store_id, scope=body.scope))
+    return {"started": True, "store_id": body.store_id, "scope": body.scope}
 
 
 @router.delete("/{store_id}")

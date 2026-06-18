@@ -41,7 +41,7 @@ def _job_stats(job) -> dict:
         "failed": job.failed,
         "skipped": job.skipped,
         "warning": job.warning,
-        "deactivated": job.deactivated,
+        "deactivated_variants": job.deactivated_variants,
         "logs_total": job.log_seq,
         "logs_in_memory": len(job.logs),
         "logs_dropped": job.logs_dropped,
@@ -59,8 +59,6 @@ def _job_stats(job) -> dict:
 def _job_meta(job) -> dict:
     return {
         "target_mode": job.target_mode,
-        "deactivate_missing": job.deactivate_missing,
-        "deactivate_scope": job.deactivate_scope,
         "csv_delimiter": job.csv_delimiter,
     }
 
@@ -91,8 +89,6 @@ async def create_price_update_job(
     store_id: int = Query(...),
     duplicate_mode: Literal["error", "last_wins"] = Query("error"),
     target_mode: Literal["product", "variant"] = Query("product"),
-    deactivate_missing: bool = Query(False),
-    deactivate_scope: Literal["file_products", "all_store"] = Query("all_store"),
     csv_delimiter: Literal["comma", "semicolon", "tab", "pipe"] = Query("semicolon"),
 ):
     if not _is_allowed_price_file(file.filename):
@@ -108,8 +104,6 @@ async def create_price_update_job(
             csv_bytes=content,
             duplicate_mode=duplicate_mode,
             target_mode=target_mode,
-            deactivate_missing=deactivate_missing,
-            deactivate_scope=deactivate_scope,
             csv_delimiter=csv_delimiter,
         )
     except ValueError as exc:

@@ -168,6 +168,7 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                 pay = await svc.sync_payments()
                 ship = await svc.sync_shipments()
                 cat = await svc.sync_categories()
+                pgrp = await svc.sync_product_groups()
                 stat = await svc.sync_statuses()
                 disc = await svc.sync_discounts()
                 prod = await svc.sync_producers()
@@ -179,13 +180,13 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                 subs = await svc.sync_subscribers()
                 ctree = await svc.sync_categories_tree()
                 await svc.close()
-                total = pay + ship + cat + stat + disc + prod + tax + pstk + parc + ugrp + curr + subs + ctree
+                total = pay + ship + cat + pgrp + stat + disc + prod + tax + pstk + parc + ugrp + curr + subs + ctree
                 logger.info(
                     "Reference sync done for %s: payments=%d, shipments=%d, "
-                    "categories=%d, statuses=%d, discounts=%d, producers=%d, "
+                    "categories=%d, product_groups=%d, statuses=%d, discounts=%d, producers=%d, "
                     "taxes=%d, stocks=%d, parcels=%d, user_groups=%d, "
                     "currencies=%d, subscribers=%d, cat_tree=%d",
-                    store.name, pay, ship, cat, stat, disc,
+                    store.name, pay, ship, cat, pgrp, stat, disc,
                     prod, tax, pstk, parc, ugrp, curr, subs, ctree,
                 )
                 results.append(
@@ -198,6 +199,7 @@ async def run_reference_sync(store_id: int | None = None) -> list[dict]:
                             "payments": pay,
                             "shipments": ship,
                             "categories": cat,
+                            "product_groups": pgrp,
                             "statuses": stat,
                             "discounts": disc,
                             "producers": prod,
@@ -282,13 +284,19 @@ async def sync_ga4_hourly():
     await run_ga4_sync()
 
 
-SyncScope = Literal["all", "orders", "products", "customers", "reference", "transform", "ga4"]
+SyncScope = Literal["all", "quick", "orders", "products", "customers", "reference", "transform", "ga4"]
 
 
 async def run_sync_now(
-    store_id: int | None = None, scope: SyncScope = "all"
+    store_id: int | None = None, scope: SyncScope = "quick"
 ) -> dict:
-    """Run one or more sync phases; used by scheduler hooks and HTTP API."""
+    """
+    Run one or more sync phases; used by scheduler hooks and HTTP API.
+
+    scope="quick"  — orders (incremental since last sync) + transform only.
+                     Fast: typically finishes in seconds. Use for the UI refresh button.
+    scope="all"    — full sync of every phase (slow, use the scheduler or manual admin action).
+    """
     lock = _get_sync_lock(store_id)
     if lock.locked():
         return {
@@ -310,7 +318,7 @@ async def run_sync_now(
     async with lock:
         try:
             out: dict = {"scope": scope, "store_id": store_id}
-            if scope in ("all", "orders"):
+            if scope in ("all", "quick", "orders"):
                 out["orders"] = await run_orders_sync(store_id)
             if scope in ("all", "products"):
                 out["products"] = await run_products_sync(store_id)
@@ -318,7 +326,7 @@ async def run_sync_now(
                 out["customers"] = await run_customers_sync(store_id)
             if scope in ("all", "reference"):
                 out["reference"] = await run_reference_sync(store_id)
-            if scope in ("all", "transform"):
+            if scope in ("all", "quick", "transform"):
                 out["transform"] = await run_transform()
             if scope in ("all", "ga4"):
                 out["ga4"] = await run_ga4_sync()
@@ -347,11 +355,37 @@ async def run_sync_now(
 
 
 def setup_scheduler():
-    scheduler.add_job(sync_all_stores_orders, "interval", hours=1, id="sync_orders")
-    scheduler.add_job(sync_all_stores_products, "interval", hours=6, id="sync_products")
-    scheduler.add_job(sync_all_stores_customers, "interval", hours=24, id="sync_customers")
-    scheduler.add_job(sync_all_stores_reference, "interval", hours=24, id="sync_reference")
-    scheduler.add_job(transform_core, "interval", hours=1, id="transform_core", misfire_grace_time=300)
-    scheduler.add_job(sync_ga4_hourly, "interval", hours=1, id="sync_ga4", misfire_grace_time=1800)
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+
+    # Stagger first runs so they don't all fire simultaneously on startup.
+    # misfire_grace_time=0 prevents backfill runs for overdue jobs.
+    scheduler.add_job(
+        sync_all_stores_orders, "interval", hours=1, id="sync_orders",
+        next_run_time=now + timedelta(seconds=30), misfire_grace_time=1,
+    )
+    scheduler.add_job(
+        sync_all_stores_products, "interval", hours=6, id="sync_products",
+        next_run_time=now + timedelta(minutes=2), misfire_grace_time=1,
+    )
+    scheduler.add_job(
+        sync_all_stores_customers, "interval", hours=24, id="sync_customers",
+        next_run_time=now + timedelta(minutes=4), misfire_grace_time=1,
+    )
+    scheduler.add_job(
+        sync_all_stores_reference, "interval", hours=24, id="sync_reference",
+        next_run_time=now + timedelta(minutes=6), misfire_grace_time=1,
+    )
+    scheduler.add_job(
+        transform_core, "interval", hours=1, id="transform_core",
+        next_run_time=now + timedelta(minutes=1), misfire_grace_time=1,
+    )
+    scheduler.add_job(
+        sync_ga4_hourly, "interval", hours=1, id="sync_ga4",
+        next_run_time=now + timedelta(minutes=8), misfire_grace_time=1,
+    )
     scheduler.start()
-    logger.info("Scheduler started: orders/1h, products/6h, customers/24h, reference/24h, transform/1h, ga4/1h(today+yesterday)")
+    logger.info(
+        "Scheduler started: orders/1h(+30s), products/6h(+2m), customers/24h(+4m), "
+        "reference/24h(+6m), transform/1h(+1m), ga4/1h(+8m)"
+    )
