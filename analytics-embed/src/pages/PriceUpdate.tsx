@@ -5,7 +5,6 @@ import type {
   PriceUpdateLogItem,
   PriceUpdateLogsResponse,
   PriceUpdateCsvDelimiter,
-  PriceUpdateDeactivateScope,
   PriceUpdateTargetMode,
   PriceUpdateValidationError,
 } from "../api";
@@ -51,8 +50,6 @@ function clearPersistedJob() {
 export default function PriceUpdate() {
   const [file, setFile] = useState<File | null>(null);
   const [targetMode, setTargetMode] = useState<PriceUpdateTargetMode>("product");
-  const [deactivateMissing, setDeactivateMissing] = useState(false);
-  const [deactivateScope, setDeactivateScope] = useState<PriceUpdateDeactivateScope>("file_products");
   const [duplicateMode, setDuplicateMode] = useState<"error" | "last_wins">("error");
   const [csvDelimiter, setCsvDelimiter] = useState<PriceUpdateCsvDelimiter>("semicolon");
   const [creating, setCreating] = useState(false);
@@ -258,8 +255,6 @@ export default function PriceUpdate() {
       const created = await api.createPriceUpdateJob(file, {
         duplicate_mode: duplicateMode,
         target_mode: targetMode,
-        deactivate_missing: deactivateMissing,
-        deactivate_scope: deactivateScope,
         csv_delimiter: csvDelimiter,
       });
       setJob(created);
@@ -364,72 +359,10 @@ export default function PriceUpdate() {
           {isVariantMode ? (
             <>
               {" "}
-              W trybie wariantów <code>code</code> to kod wariantu. Ceny i aktywność są porównywane z API Shoper (nie z lokalnej bazy); job nic nie zapisuje do tabel produktów.
+              W trybie wariantów <code>code</code> to kod wariantu. Po aktualizacji cen wyłączone zostaną warianty rozszerzone (extended) spoza pliku — tylko u produktów z co najmniej jednym wierszem w CSV. Produkty spoza pliku nie są wyłączane.
             </>
           ) : null}
         </p>
-
-        <div className="mt-5 pt-5 border-t border-slate-100">
-          <label className="flex items-start gap-3 text-sm text-slate-700 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={deactivateMissing}
-              onChange={(e) => setDeactivateMissing(e.target.checked)}
-              className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600"
-            />
-            <span>
-              <span className="font-medium">Dezaktywuj niewystępujące w pliku rekordy</span>
-              <span className="block text-xs text-slate-500 mt-1">
-                Po aktualizacji cen wyłączy w Shoper aktywne {isVariantMode ? "warianty" : "produkty"}, których kodu nie ma w CSV.
-              </span>
-            </span>
-          </label>
-          {deactivateMissing && isVariantMode ? (
-            <fieldset className="mt-4 ml-7 space-y-2 border-0 p-0">
-              <legend className="text-xs font-medium text-slate-600 mb-1">Zakres dezaktywacji wariantów</legend>
-              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
-                <input
-                  type="radio"
-                  name="deactivateScope"
-                  checked={deactivateScope === "file_products"}
-                  onChange={() => setDeactivateScope("file_products")}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="font-medium">Tylko produkty z pliku</span>
-                  <span className="block text-xs text-slate-500">
-                    Wyłączy brakujące warianty tylko u produktów, które mają choć jeden wiersz w pliku.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
-                <input
-                  type="radio"
-                  name="deactivateScope"
-                  checked={deactivateScope === "all_store"}
-                  onChange={() => setDeactivateScope("all_store")}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="font-medium">Cały sklep</span>
-                  <span className="block text-xs text-slate-500">
-                    Wyłączy wszystkie aktywne warianty w sklepie, których kodu nie ma w pliku.
-                  </span>
-                </span>
-              </label>
-            </fieldset>
-          ) : null}
-          {deactivateMissing && !isVariantMode ? (
-            <p className="mt-3 ml-7 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
-              Uwaga: w trybie produktów dezaktywacja dotyczy wszystkich aktywnych produktów w sklepie, których kodu nie ma w pliku.
-            </p>
-          ) : null}
-          {deactivateMissing && isVariantMode && deactivateScope === "all_store" ? (
-            <p className="mt-3 ml-7 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
-              Uwaga: zakres „cały sklep” może wyłączyć warianty u produktów spoza pliku.
-            </p>
-          ) : null}
-        </div>
 
         {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
 
@@ -481,9 +414,6 @@ export default function PriceUpdate() {
             <h3 className="text-sm font-semibold text-slate-700 mb-3">2) Postęp</h3>
             <p className="text-xs text-slate-500 mb-2">
               Tryb: {job.target_mode === "variant" ? "warianty" : "produkty"}
-              {job.deactivate_missing
-                ? ` · dezaktywacja (${job.deactivate_scope === "file_products" ? "produkty z pliku" : "cały sklep"})`
-                : ""}
               {job.csv_delimiter
                 ? ` · separator: ${CSV_DELIMITERS.find((d) => d.value === job.csv_delimiter)?.label ?? job.csv_delimiter}`
                 : ""}
@@ -526,7 +456,9 @@ export default function PriceUpdate() {
               <Metric label="Błąd wiersza" value={job.stats.failed} />
               <Metric label="Bez zmian" value={job.stats.skipped} />
               <Metric label="Ostrzeżenia" value={job.stats.warning} />
-              <Metric label="Wyłączono" value={job.stats.deactivated ?? 0} />
+              {job.target_mode === "variant" ? (
+                <Metric label="Wył. warianty" value={job.stats.deactivated_variants ?? 0} />
+              ) : null}
               <Metric label="Skuteczność" value={`${job.stats.success_rate}%`} />
             </div>
           </div>
@@ -636,8 +568,6 @@ function fmtPhase(phase: string | null | undefined): string {
       return "aktualizacja wiersza";
     case "post_process":
       return "finalizacja produktu";
-    case "deactivate_store":
-      return "dezaktywacja sklepu";
     default:
       return phase ?? "…";
   }

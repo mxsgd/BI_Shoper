@@ -18,6 +18,7 @@ class RawProduct(Base):
     product_id: Mapped[int] = mapped_column(BigInteger, index=True)
     type: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0=product, 1=bundle
     producer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    group_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     category_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     category_tree_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     tax_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

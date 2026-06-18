@@ -217,6 +217,38 @@ class ShoperClient:
                 await asyncio.sleep(RETRY_DELAY)
         return None
 
+    async def post_with_error(self, endpoint: str, body: dict) -> tuple[Any | None, str | None]:
+        """POST returning (response_json, error_message)."""
+        client = await self._get_client()
+        did_refresh = False
+        last_error: str | None = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                await asyncio.sleep(RATE_DELAY)
+                r = await client.post(endpoint, json=body)
+                if r.status_code in (200, 201):
+                    return r.json(), None
+                if r.status_code == 401:
+                    if not did_refresh and await self._refresh_token_once():
+                        did_refresh = True
+                        client = await self._get_client()
+                        continue
+                    raise ShoperUnauthorizedError(f"POST {endpoint} -> 401: {r.text[:300]}")
+                if r.status_code == 429:
+                    wait = int(r.headers.get("Retry-After", RETRY_DELAY))
+                    await asyncio.sleep(wait)
+                    continue
+                last_error = f"HTTP {r.status_code}: {r.text[:400]}"
+                logger.error("POST %s -> %s", endpoint, last_error)
+                return None, last_error
+            except ShoperUnauthorizedError:
+                raise
+            except Exception as e:
+                last_error = str(e)
+                logger.error("Error POST %s: %s", endpoint, e)
+                await asyncio.sleep(RATE_DELAY)
+        return None, last_error
+
     async def put(self, endpoint: str, body: dict) -> Any:
         """PUT with retry logic."""
         data, _ = await self.put_with_error(endpoint, body)

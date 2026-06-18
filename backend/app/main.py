@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine, Base, async_session
-from .routers import dashboard, orders, products, customers, stores, analytics, price_update
-from .scheduler.jobs import setup_scheduler, run_ga4_sync
+from .routers import dashboard, orders, products, customers, stores, analytics, price_update, variant_codes
+from .scheduler.jobs import setup_scheduler
 from .services.transform_service import TransformService
 
 # Import all models to register them with SQLAlchemy
@@ -93,6 +93,8 @@ async def _ensure_constraints(conn):
         "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS remove_from_cart INTEGER DEFAULT 0",
         "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS add_to_cart_value NUMERIC(12,2) DEFAULT 0",
         "ALTER TABLE raw_ga4_funnel ADD COLUMN IF NOT EXISTS purchase_value NUMERIC(12,2) DEFAULT 0",
+        # Product group support
+        "ALTER TABLE raw_products ADD COLUMN IF NOT EXISTS group_id BIGINT",
     ]
     for ddl in alter_cols:
         try:
@@ -103,13 +105,22 @@ async def _ensure_constraints(conn):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from sqlalchemy import text as sa_text
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_constraints(conn)
+    # CREATE INDEX CONCURRENTLY must run outside a transaction block
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        try:
+            await conn.execute(sa_text(
+                "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_raw_products_group_id ON raw_products (group_id)"
+            ))
+        except Exception:
+            pass
     async with async_session() as db:
         ts = TransformService(db)
         await ts.ensure_dim_date()
-    await run_ga4_sync()
     setup_scheduler()
     yield
     await engine.dispose()
@@ -137,6 +148,7 @@ app.include_router(customers.router)
 app.include_router(stores.router)
 app.include_router(analytics.router)
 app.include_router(price_update.router)
+app.include_router(variant_codes.router)
 
 
 @app.get("/api/health")

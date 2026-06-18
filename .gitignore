@@ -15,4 +15,4 @@ Shoper_Documentation_Link.txt
 !package.json
 !package-lock.json
 !tsconfig*.json
-.csv
+/scripts

@@ -16,7 +16,7 @@ from ..models.product import Product
 from ..models.customer import Customer
 from ..models.raw import (
     RawOrder, RawOrderItem, RawProduct, RawCustomer,
-    RawPayment, RawShipping, RawCategory, RawDiscount, RawStatus,
+    RawPayment, RawShipping, RawCategory, RawProductGroup, RawDiscount, RawStatus,
     RawProducer, RawTax, RawProductStock, RawParcel, RawUserGroup, RawCurrency,
     RawSubscriber,
 )
@@ -48,7 +48,9 @@ class SyncService:
         params = {}
         if since:
             # Shoper filtruje po polu "date" (data utworzenia), nie "date_add" — zły klucz dawał 404.
-            params["filters"] = f'{{"date":{{"+gte":"{since.isoformat()}"}}}}'
+            # Format musi być "YYYY-MM-DD HH:MM:SS" (bez timezone/T) — Shoper nie rozumie ISO 8601 z offsetem.
+            since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+            params["filters"] = f'{{"date":{{"+gte":"{since_str}"}}}}'
 
         orders = await self.client.get_all("/orders", params=params)
         count = 0
@@ -261,6 +263,30 @@ class SyncService:
             count += 1
         await self.db.commit()
         logger.info("Synced %d categories for store %s", count, self.store.name)
+        return count
+
+    # ------------------------------------------------------------------
+    # Product Groups / Zestawy wariantów (reference data)
+    # ------------------------------------------------------------------
+    async def sync_product_groups(self) -> int:
+        """Fetch all product groups (zestawy wariantów) and upsert into raw_product_groups."""
+        items = await self.client.get_all("/product-groups")
+        count = 0
+        for g in items:
+            row = _shoper_product_group_to_raw_row(self.store.id, g)
+            if not row:
+                continue
+            stmt = pg_insert(RawProductGroup).values(**row)
+            exclude = {"store_id", "group_id", "loaded_at"}
+            set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+            set_["updated_at"] = datetime.now(timezone.utc)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["store_id", "group_id"], set_=set_
+            )
+            await self.db.execute(stmt)
+            count += 1
+        await self.db.commit()
+        logger.info("Synced %d product groups for store %s", count, self.store.name)
         return count
 
     # ------------------------------------------------------------------
@@ -750,6 +776,7 @@ def _shoper_product_to_raw_row(store_id: int, p: dict) -> dict | None:
         "product_id": pid,
         "type": _int_or_none(p.get("type")),
         "producer_id": _int_or_none(p.get("producer_id")),
+        "group_id": _int_or_none(p.get("group_id")),
         "category_id": _int_or_none(p.get("category_id")),
         "category_tree_id": _int_or_none(p.get("category_tree_id")),
         "tax_id": _int_or_none(p.get("tax_id")),
@@ -825,6 +852,19 @@ def _shoper_category_to_raw_row(store_id: int, c: dict) -> dict | None:
         "root": _bool_from_shoper(c.get("root")),
         "order": _int_or_none(c.get("order")),
         "translations": _json_safe(c.get("translations")),
+    }
+
+
+def _shoper_product_group_to_raw_row(store_id: int, g: dict) -> dict | None:
+    gid = _int_or_none(g.get("group_id", g.get("id")))
+    if not gid:
+        return None
+    name = _extract_translation(g.get("translations"), "name") or g.get("name") or ""
+    return {
+        "store_id": store_id,
+        "group_id": gid,
+        "name": str(name)[:255] if name else None,
+        "translations": _json_safe(g.get("translations")),
     }
 
 

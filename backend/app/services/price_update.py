@@ -23,7 +23,6 @@ JobStatus = Literal["PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED"]
 LogStatus = Literal["SUCCESS", "ERROR", "SKIPPED", "WARNING"]
 TargetMode = Literal["product", "variant"]
 CsvDelimiter = Literal["comma", "semicolon", "tab", "pipe"]
-DeactivateScope = Literal["file_products", "all_store"]
 
 _DELIMITER_CHARS: dict[CsvDelimiter, str] = {
     "comma": ",",
@@ -81,8 +80,6 @@ class PriceUpdateJob:
     file_name: str
     created_at: str
     target_mode: TargetMode = "product"
-    deactivate_missing: bool = False
-    deactivate_scope: DeactivateScope = "all_store"
     csv_delimiter: CsvDelimiter = "semicolon"
     status: JobStatus = "PENDING"
     started_at: str | None = None
@@ -93,7 +90,7 @@ class PriceUpdateJob:
     failed: int = 0
     skipped: int = 0
     warning: int = 0
-    deactivated: int = 0
+    deactivated_variants: int = 0
     rows: list[PriceUpdateRow] = field(default_factory=list)
     logs: list[PriceUpdateLogEntry] = field(default_factory=list)
     validation_errors: list[ValidationError] = field(default_factory=list)
@@ -105,7 +102,7 @@ class PriceUpdateJob:
     started_at_ts: float | None = None  # unix timestamp do ETA
     current_row_number: int | None = None
     current_code: str | None = None
-    current_phase: str | None = None  # row | post_process | deactivate_store
+    current_phase: str | None = None  # row | post_process
 
 
 def _now_iso() -> str:
@@ -266,8 +263,6 @@ class PriceUpdateJobManager:
         csv_bytes: bytes,
         duplicate_mode: Literal["error", "last_wins"] = "error",
         target_mode: TargetMode = "product",
-        deactivate_missing: bool = False,
-        deactivate_scope: DeactivateScope = "all_store",
         csv_delimiter: CsvDelimiter = "semicolon",
     ) -> PriceUpdateJob:
         if len(csv_bytes) > MAX_FILE_BYTES:
@@ -280,17 +275,12 @@ class PriceUpdateJobManager:
         )
         if len(rows) > MAX_ROWS:
             raise ValueError(f"Too many rows (max {MAX_ROWS})")
-        if target_mode == "product":
-            deactivate_scope = "all_store"
-
         job = PriceUpdateJob(
             job_id=f"job_{uuid.uuid4().hex[:12]}",
             store_id=store_id,
             file_name=file_name or "upload.csv",
             created_at=_now_iso(),
             target_mode=target_mode,
-            deactivate_missing=deactivate_missing,
-            deactivate_scope=deactivate_scope,
             csv_delimiter=csv_delimiter,
             rows=rows,
             total=len(rows),
@@ -521,16 +511,6 @@ class PriceUpdateJobManager:
                                     job, exc, label=f"post-process produkt {product_id}"
                                 )
 
-                    if job.deactivate_missing and job.deactivate_scope == "all_store":
-                        self._set_progress(job, phase="deactivate_store", code="cały sklep")
-                        try:
-                            await self._deactivate_products_not_in_file(client, job)
-                        except (ShoperUnauthorizedError, ShoperAuthError):
-                            raise
-                        except Exception as exc:
-                            await self._log_post_process_crash(
-                                job, exc, label="dezaktywacja produktów spoza pliku (cały sklep)"
-                            )
                 else:
                     for row in job.rows:
                         self._set_progress(
@@ -542,16 +522,6 @@ class PriceUpdateJobManager:
                             raise
                         except Exception as exc:
                             await self._log_row_crash(job, row, exc)
-                    if job.deactivate_missing:
-                        self._set_progress(job, phase="deactivate_store", code="cały sklep")
-                        try:
-                            await self._deactivate_missing_products(client, job)
-                        except (ShoperUnauthorizedError, ShoperAuthError):
-                            raise
-                        except Exception as exc:
-                            await self._log_post_process_crash(
-                                job, exc, label="dezaktywacja produktów"
-                            )
 
                 job.status = "DONE"
             except (ShoperUnauthorizedError, ShoperAuthError) as exc:
@@ -850,7 +820,7 @@ class PriceUpdateJobManager:
         product_id: int,
         product_min_in_file: dict[int, tuple[str, float]],
     ) -> None:
-        """Post-process jednego produktu: cena bazowego stocku + cena produktu + aktywacja + wyłączenie off-file wariantów."""
+        """Post-process: ceny, domyślny wariant, aktywacja produktu, wyłączenie wariantów spoza pliku (tylko extended)."""
         cheapest_code = product_min_in_file.get(product_id, (None, 0))[0] or ""
         try:
             await self._apply_single_product_price(client, job, product_id, product_min_in_file)
@@ -877,7 +847,7 @@ class PriceUpdateJobManager:
         except (ShoperUnauthorizedError, ShoperAuthError):
             raise
         except Exception as exc:
-            await self._log_post_process_crash(job, exc, label=f"dezaktywacja off-file {product_id}")
+            await self._log_post_process_crash(job, exc, label=f"dezaktywacja wariantów {product_id}")
 
     async def _apply_single_product_price(
         self,
@@ -1052,6 +1022,7 @@ class PriceUpdateJobManager:
         log_label: str,
         skip_refetch: bool = False,
     ) -> None:
+        """Wyłącz pojedynczy wariant rozszerzony (extended). Nie dotyka stocku bazowego ani produktów spoza pliku."""
         code = (live.get("code") or "").strip()
         if not code or code in job.codes_in_file:
             return
@@ -1065,7 +1036,6 @@ class PriceUpdateJobManager:
         old_price = _shoper_price(live)
 
         if _is_base_stock(live):
-            # Nie powinno tu trafić — base stock filtrujemy wyżej. Cicha ochrona.
             return
 
         if _shoper_bool(live.get("default")):
@@ -1133,7 +1103,7 @@ class PriceUpdateJobManager:
             product_id=product_id,
             stock_id=stock_id,
         )
-        job.deactivated += 1
+        job.deactivated_variants += 1
 
     async def _deactivate_variants_not_in_file_for_product(
         self,
@@ -1144,10 +1114,8 @@ class PriceUpdateJobManager:
         *,
         reason: str,
     ) -> None:
-        """Wyłącz warianty rozszerzone (extended=True) spoza pliku. Stock bazowy ignorujemy — jego aktywność sterowana jest przez translację produktu."""
+        """Wyłącz warianty extended spoza pliku — tylko u produktu obecnego w CSV. Stock bazowy pomijamy."""
         all_stocks = await self._list_live_stocks_for_product(client, product_id)
-
-        # Interesują nas tylko warianty rozszerzone — base stock pomijamy całkowicie
         extended = [s for s in all_stocks if isinstance(s, dict) and _shoper_bool(s.get("extended"))]
         off_file = [
             (s.get("code") or "").strip()
@@ -1176,7 +1144,6 @@ class PriceUpdateJobManager:
             c = (live.get("code") or "").strip()
             if not c or c in job.codes_in_file:
                 continue
-            # live pochodzi z _list_live_stocks_for_product (świeże dane) — nie re-fetchujemy
             await self._deactivate_stock_variant(
                 client,
                 job,
@@ -1185,98 +1152,6 @@ class PriceUpdateJobManager:
                 log_label=f"brak w pliku — {reason}",
                 skip_refetch=True,
             )
-
-    async def _deactivate_products_not_in_file(
-        self, client: ShoperClient, job: PriceUpdateJob
-    ) -> None:
-        """Tryb variant + all_store: dezaktywuj produkty których żaden wariant nie jest w pliku.
-        
-        Używamy product_ids_in_file (product_id Shopera), nie codes_in_file — bo plik zawiera
-        kody wariantów, a nie kody produktów nadrzędnych.
-        """
-        products = await client.get_all("/products")
-        for product_live in products:
-            if not isinstance(product_live, dict):
-                continue
-            product_id = _shoper_product_id(product_live)
-            if not product_id:
-                continue
-            if product_id in job.product_ids_in_file:
-                # Ten produkt ma warianty w pliku — nie ruszamy
-                continue
-            if not _shoper_bool(product_live.get("active")):
-                # Już nieaktywny
-                continue
-            code = (product_live.get("code") or "").strip() or f"product_id={product_id}"
-            old_price = _shoper_price(product_live)
-            response, api_err = await client.put_with_error(
-                f"/products/{product_id}",
-                _product_active_payload(False, include_top_level=True),
-            )
-            if response is None:
-                await self._add_log(
-                    job,
-                    row=PriceUpdateRow(row_number=0, code=code, price=0),
-                    old_price=old_price,
-                    status="WARNING",
-                    message=f"Nie udało się wyłączyć produktu spoza pliku: {api_err or 'unknown'}",
-                    product_id=product_id,
-                )
-                job.warning += 1
-                continue
-            await self._add_log(
-                job,
-                row=PriceUpdateRow(row_number=0, code=code, price=0),
-                old_price=old_price,
-                status="SUCCESS",
-                message="Produkt wyłączony w Shoper (brak wariantów w pliku — cały sklep)",
-                http_status=200,
-                product_id=product_id,
-            )
-            job.deactivated += 1
-
-    async def _deactivate_missing_products(
-        self, client: ShoperClient, job: PriceUpdateJob
-    ) -> None:
-        """Tryb product + all_store: dezaktywuj produkty których kod nie jest w pliku."""
-        products = await client.get_all("/products")
-        for product_live in products:
-            if not isinstance(product_live, dict):
-                continue
-            code = (product_live.get("code") or "").strip()
-            if not code or code in job.codes_in_file:
-                continue
-            if not _shoper_bool(product_live.get("active")):
-                continue
-            product_id = _shoper_product_id(product_live)
-            if not product_id:
-                continue
-            old_price = _shoper_price(product_live)
-            response, api_err = await client.put_with_error(
-                f"/products/{product_id}",
-                _product_active_payload(False, include_top_level=True),
-            )
-            if response is None:
-                await self._add_log(
-                    job,
-                    row=PriceUpdateRow(row_number=0, code=code, price=0),
-                    old_price=old_price,
-                    status="ERROR",
-                    message=f"Failed to deactivate product not in file: {api_err or 'unknown'}",
-                    product_id=product_id,
-                )
-                job.warning += 1
-                continue
-            await self._add_log(
-                job,
-                row=PriceUpdateRow(row_number=0, code=code, price=0),
-                old_price=old_price,
-                status="SUCCESS",
-                message="Product deactivated in Shoper (not in file)",
-                http_status=200,
-                product_id=product_id,
-            )
-            job.deactivated += 1
 
     async def _find_replacement_default_stock(
         self,
@@ -1303,32 +1178,6 @@ class PriceUpdateJobManager:
                 if (item.get("code") or "").strip() == code:
                     return item
         return None
-
-    async def _deactivate_missing_variants(
-        self,
-        client: ShoperClient,
-        job: PriceUpdateJob,
-        product_min_in_file: dict[int, tuple[str, float]],
-    ) -> None:
-        stocks = await client.get_all("/product-stocks")
-        scope_label = (
-            "products from file"
-            if job.deactivate_scope == "file_products"
-            else "entire store"
-        )
-        for live in stocks:
-            if not isinstance(live, dict):
-                continue
-            product_id = _shoper_product_id(live)
-            if job.deactivate_scope == "file_products" and product_id not in job.product_ids_in_file:
-                continue
-            await self._deactivate_stock_variant(
-                client,
-                job,
-                live,
-                product_min_in_file,
-                log_label=f"dezaktywacja — {scope_label}",
-            )
 
     async def _get_base_stock(
         self, db: AsyncSession, store_id: int, code: str
