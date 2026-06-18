@@ -289,6 +289,126 @@ class SyncService:
         logger.info("Synced %d product groups for store %s", count, self.store.name)
         return count
 
+    async def sync_product_group_by_id(self, group_id: int) -> bool:
+        """Fetch one product group (zestaw wariantów) and upsert metadata."""
+        g = await self.client.get(f"/product-groups/{group_id}")
+        if not g:
+            items = await self.client.get_filtered("/product-groups", {"group_id": group_id})
+            g = items[0] if items else None
+        if not g:
+            logger.warning("Product group %s not found in Shoper for store %s", group_id, self.store.name)
+            return False
+        row = _shoper_product_group_to_raw_row(self.store.id, g)
+        if not row:
+            return False
+        stmt = pg_insert(RawProductGroup).values(**row)
+        exclude = {"store_id", "group_id", "loaded_at"}
+        set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+        set_["updated_at"] = datetime.now(timezone.utc)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["store_id", "group_id"], set_=set_
+        )
+        await self.db.execute(stmt)
+        await self.db.commit()
+        return True
+
+    async def sync_products_for_group(self, group_id: int) -> int:
+        """Fetch products assigned to a product group and upsert into DB."""
+        products = await self.client.get_filtered("/products", {"group_id": group_id})
+        count = 0
+        for p in products:
+            shoper_id = int(p.get("product_id", p.get("id", 0)))
+            if not shoper_id:
+                continue
+
+            name = _extract_translation(p.get("translations", {}), "name")
+
+            existing = await self.db.execute(
+                select(Product)
+                .where(
+                    Product.store_id == self.store.id,
+                    Product.shoper_product_id == shoper_id,
+                )
+                .limit(1)
+            )
+            product = existing.scalars().first()
+            if product:
+                product.name = name or product.name
+                product.code = p.get("code") or product.code
+                product.price = _float_or_zero(p.get("price"))
+                product.stock_quantity = _int_or_none(p.get("stock", {}).get("stock")) or 0
+                product.synced_at = datetime.now(timezone.utc)
+            else:
+                product = Product(
+                    store_id=self.store.id,
+                    shoper_product_id=shoper_id,
+                    code=p.get("code"),
+                    ean=p.get("ean"),
+                    name=name or f"Product #{shoper_id}",
+                    price=_float_or_zero(p.get("price")),
+                    stock_quantity=_int_or_none(p.get("stock", {}).get("stock")) or 0,
+                )
+                self.db.add(product)
+            await self._upsert_raw_product(p)
+            count += 1
+
+        await self.db.commit()
+        logger.info(
+            "Synced %d products for group %s (store %s)",
+            count,
+            group_id,
+            self.store.name,
+        )
+        return count
+
+    async def sync_product_stocks_for_group(self, group_id: int) -> int:
+        """Fetch variant stocks for all products in a product group."""
+        pids = (
+            await self.db.execute(
+                select(RawProduct.product_id).where(
+                    RawProduct.store_id == self.store.id,
+                    RawProduct.group_id == group_id,
+                )
+            )
+        ).scalars().all()
+        count = 0
+        for pid in pids:
+            stocks = await self.client.get_filtered("/product-stocks", {"product_id": pid})
+            for s in stocks:
+                row = _shoper_product_stock_to_raw_row(self.store.id, s)
+                if not row:
+                    continue
+                stmt = pg_insert(RawProductStock).values(**row)
+                exclude = {"store_id", "stock_id", "loaded_at"}
+                set_ = {k: getattr(stmt.excluded, k) for k in row if k not in exclude}
+                set_["updated_at"] = datetime.now(timezone.utc)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["store_id", "stock_id"], set_=set_
+                )
+                await self.db.execute(stmt)
+                count += 1
+        await self.db.commit()
+        logger.info(
+            "Synced %d product stocks for group %s (store %s)",
+            count,
+            group_id,
+            self.store.name,
+        )
+        return count
+
+    async def sync_variant_group(self, group_id: int, *, include_stocks: bool = False) -> dict[str, int]:
+        """Sync one zestaw wariantów: metadata + products. Stocks optional (slow)."""
+        meta_ok = await self.sync_product_group_by_id(group_id)
+        products = await self.sync_products_for_group(group_id)
+        stocks = 0
+        if include_stocks:
+            stocks = await self.sync_product_stocks_for_group(group_id)
+        return {
+            "group_synced": int(meta_ok),
+            "products": products,
+            "stocks": stocks,
+        }
+
     # ------------------------------------------------------------------
     # Statuses (reference data)
     # ------------------------------------------------------------------

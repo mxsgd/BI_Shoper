@@ -12,13 +12,17 @@ async function get<T>(path: string, params: Record<string, string | number | und
   return res.json();
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+async function post<T>(path: string, body: unknown = {}): Promise<T> {
+  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  const res = await fetch(`${BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
   return res.json();
 }
 
@@ -437,6 +441,13 @@ export interface VariantGroup {
   product_count: number;
 }
 
+export interface SyncVariantGroupResult {
+  group: VariantGroup;
+  group_synced: number;
+  products: number;
+  stocks: number;
+}
+
 export interface VariantProduct {
   product_id: number;
   code: string;
@@ -564,8 +575,10 @@ export const api = {
   getPriceUpdateLogsExportUrl: (jobId: string) => `${BASE}/price-update/jobs/${jobId}/logs/export.csv`,
 
   // Variant code generator
-  getVariantGroups: () =>
-    get<VariantGroup[]>("/variant-codes/groups"),
+  getVariantGroups: (params: { refresh?: boolean } = {}) =>
+    get<VariantGroup[]>("/variant-codes/groups", { refresh: params.refresh ? 1 : undefined }),
+  syncVariantGroup: (groupId: number) =>
+    post<SyncVariantGroupResult>(`/variant-codes/groups/${groupId}/sync`),
   searchVariantProducts: (params: { q?: string; group_id?: number; limit?: number } = {}) =>
     get<VariantProduct[]>("/variant-codes/search-products", params),
   getProductVariantStocks: (productId: number) =>

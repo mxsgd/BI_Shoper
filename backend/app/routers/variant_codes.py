@@ -22,6 +22,7 @@ from ..models.raw.raw_products import RawProduct
 from ..models.store import Store
 from ..services.shoper_auth import ensure_store_token
 from ..services.shoper_client import ShoperClient, ShoperUnauthorizedError
+from ..services.sync_service import SyncService
 
 logger = logging.getLogger(__name__)
 
@@ -82,15 +83,31 @@ def _is_size(name: str) -> bool:
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
-def _trans_name(translations: dict | None) -> str:
+def _trans_name(translations: dict | None, field: str = "name") -> str:
     if not translations:
         return ""
+    for lang in ("pl_PL", "en_GB", "pl", "en"):
+        lang_data = translations.get(lang)
+        if isinstance(lang_data, dict):
+            val = (lang_data.get(field) or "").strip()
+            if val:
+                return val
     for lang_data in translations.values():
         if isinstance(lang_data, dict):
-            name = (lang_data.get("name") or "").strip()
-            if name:
-                return name
+            val = (lang_data.get(field) or "").strip()
+            if val:
+                return val
     return ""
+
+
+def _group_display_name(g: RawProductGroup | None, group_id: int) -> str:
+    if g is not None:
+        if g.name and g.name.strip():
+            return g.name.strip()
+        from_trans = _trans_name(g.translations, "name")
+        if from_trans:
+            return from_trans
+    return f"Zestaw wariantów {group_id}"
 
 
 def _product_name(p: RawProduct) -> str:
@@ -119,48 +136,118 @@ def _serialize_stock(s: RawProductStock) -> dict:
 
 # ─── endpoints ────────────────────────────────────────────────────────────────
 
+def _serialize_group_row(
+    group_id: int,
+    product_count: int,
+    known: dict[int, RawProductGroup],
+) -> dict:
+    g = known.get(group_id)
+    return {
+        "group_id": group_id,
+        "name": _group_display_name(g, group_id),
+        "product_count": product_count,
+    }
+
+
+async def _group_counts(db: AsyncSession, store_id: int) -> dict[int, int]:
+    count_rows = (
+        await db.execute(
+            select(RawProduct.group_id, func.count(RawProduct.product_id).label("cnt"))
+            .where(RawProduct.store_id == store_id, RawProduct.group_id.isnot(None))
+            .group_by(RawProduct.group_id)
+        )
+    ).all()
+    return {r.group_id: r.cnt for r in count_rows}
+
+
+async def _groups_by_id(db: AsyncSession, store_id: int, group_ids: list[int] | None = None) -> dict[int, RawProductGroup]:
+    stmt = select(RawProductGroup).where(RawProductGroup.store_id == store_id)
+    if group_ids is not None:
+        if not group_ids:
+            return {}
+        stmt = stmt.where(RawProductGroup.group_id.in_(group_ids))
+    groups = (await db.execute(stmt.order_by(RawProductGroup.group_id))).scalars().all()
+    return {g.group_id: g for g in groups}
+
+
 @router.get("/groups")
 async def list_product_groups(
     store_id: int = Query(...),
+    refresh: bool = Query(False, description="Pobierz nazwy zestawów z Shopera przed listowaniem"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Return all product groups (zestawy wariantów) that have at least one product,
-    sorted by product count descending. Used to populate the group picker.
+    Return product groups (zestawy wariantów) with human-readable names.
+    Sorted by product count descending.
     """
-    counts_stmt = (
-        select(RawProduct.group_id, func.count(RawProduct.product_id).label("cnt"))
-        .where(RawProduct.store_id == store_id, RawProduct.group_id.isnot(None))
-        .group_by(RawProduct.group_id)
-    )
-    count_rows = (await db.execute(counts_stmt)).all()
-    count_map: dict[int, int] = {r.group_id: r.cnt for r in count_rows}
-    if not count_map:
+    if refresh:
+        store = (
+            await db.execute(select(Store).where(Store.id == store_id, Store.is_active.is_(True)))
+        ).scalar_one_or_none()
+        if store is None:
+            raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
+        svc = SyncService(db, store)
+        try:
+            await ensure_store_token(db, store)
+            await svc.sync_product_groups()
+        except Exception as exc:
+            raise HTTPException(503, f"Błąd synchronizacji zestawów: {exc}") from exc
+        finally:
+            await svc.close()
+
+    count_map = await _group_counts(db, store_id)
+    known = await _groups_by_id(db, store_id)
+
+    all_ids = sorted(set(count_map.keys()) | set(known.keys()))
+    if not all_ids:
         return []
 
-    group_ids = list(count_map.keys())
-    groups_stmt = (
-        select(RawProductGroup)
-        .where(RawProductGroup.store_id == store_id, RawProductGroup.group_id.in_(group_ids))
-        .order_by(RawProductGroup.group_id)
-    )
-    groups = (await db.execute(groups_stmt)).scalars().all()
-
-    # Build id→name map from DB; for group IDs not yet synced, use fallback name
-    known: dict[int, str] = {}
-    for g in groups:
-        name = g.name or _trans_name(g.translations) or f"Zestaw {g.group_id}"
-        known[g.group_id] = name
-
-    result = []
-    for gid, cnt in count_map.items():
-        result.append({
-            "group_id": gid,
-            "name": known.get(gid) or f"Zestaw wariantów {gid}",
-            "product_count": cnt,
-        })
-    result.sort(key=lambda x: (-x["product_count"], x["name"]))
+    result = [
+        _serialize_group_row(gid, count_map.get(gid, 0), known)
+        for gid in all_ids
+    ]
+    result.sort(key=lambda x: (-x["product_count"], x["name"].lower()))
     return result
+
+
+@router.post("/groups/{group_id}/sync")
+async def sync_variant_group(
+    group_id: int,
+    store_id: int = Query(...),
+    include_stocks: bool = Query(False, description="Sync stocks too (slow for large groups)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Sync one zestaw wariantów from Shoper: group metadata + products.
+    Stocks are skipped by default — use include_stocks=true only when needed.
+    """
+    store = (
+        await db.execute(select(Store).where(Store.id == store_id, Store.is_active.is_(True)))
+    ).scalar_one_or_none()
+    if store is None:
+        raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
+
+    try:
+        await ensure_store_token(db, store)
+    except Exception as exc:
+        raise HTTPException(503, f"Błąd autoryzacji: {exc}") from exc
+
+    svc = SyncService(db, store)
+    try:
+        summary = await svc.sync_variant_group(group_id, include_stocks=include_stocks)
+    except ShoperUnauthorizedError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(503, f"Błąd synchronizacji zestawu: {exc}") from exc
+    finally:
+        await svc.close()
+
+    count_map = await _group_counts(db, store_id)
+    known = await _groups_by_id(db, store_id, [group_id])
+    group = _serialize_group_row(
+        group_id, count_map.get(group_id, 0), known
+    )
+    return {"group": group, **summary}
 
 
 @router.get("/search-products")
