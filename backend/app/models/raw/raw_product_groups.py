@@ -6,9 +6,9 @@ from ...database import Base
 
 class RawProductGroup(Base):
     """
-    Staging table for Product Groups from Shoper /product-groups endpoint.
-    A product group ('zestaw wariantów') links related products that share
-    the same variant structure (e.g. all mattresses of one model in different sizes).
+    Staging table for zestawy wariantów (Shoper /option-groups).
+    product.group_id references option-groups.group_id — the warehouse variant set
+    assigned to a product (e.g. "materace PEŁNY"), not the per-stock size/fabric axes.
     """
     __tablename__ = "raw_product_groups"
     __table_args__ = (

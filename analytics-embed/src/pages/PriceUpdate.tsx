@@ -52,6 +52,7 @@ export default function PriceUpdate() {
   const [targetMode, setTargetMode] = useState<PriceUpdateTargetMode>("product");
   const [duplicateMode, setDuplicateMode] = useState<"error" | "last_wins">("error");
   const [csvDelimiter, setCsvDelimiter] = useState<PriceUpdateCsvDelimiter>("semicolon");
+  const [keepExtraVariants, setKeepExtraVariants] = useState(false);
   const [creating, setCreating] = useState(false);
   const [job, setJobState] = useState<PriceUpdateJob | null>(() => loadCachedJob());
   const [logs, setLogs] = useState<PriceUpdateLogsResponse | null>(null);
@@ -108,7 +109,19 @@ export default function PriceUpdate() {
         }
       }
 
-      // 3) Cache sesji — tylko jeśli job nadal istnieje na serwerze
+      // 3) Ostatni job na serwerze (DB) — po restarcie backendu
+      const { job: latest } = await api.getLatestPriceUpdateJob();
+      if (latest?.job_id) {
+        const full = await fetchJobById(latest.job_id);
+        if (full) {
+          setJob(full);
+          return;
+        }
+        setJob(latest as PriceUpdateJob);
+        return;
+      }
+
+      // 4) Cache sesji — tylko jeśli job nadal istnieje na serwerze
       const cached = loadCachedJob();
       if (cached?.job_id) {
         const j = await fetchJobById(cached.job_id);
@@ -159,6 +172,8 @@ export default function PriceUpdate() {
   }, [job?.job_id, reconnectJob]);
 
   const validationErrors: PriceUpdateValidationError[] = job?.validation.errors ?? [];
+  const isXlsx = file?.name?.toLowerCase().endsWith(".xlsx") ?? false;
+  const isSql = file?.name?.toLowerCase().endsWith(".sql") ?? false;
   const canStart = !!file && !creating;
   const hasJob = !!job?.job_id;
   const isVariantMode = targetMode === "variant";
@@ -256,6 +271,7 @@ export default function PriceUpdate() {
         duplicate_mode: duplicateMode,
         target_mode: targetMode,
         csv_delimiter: csvDelimiter,
+        disable_extra_variants: !keepExtraVariants,
       });
       setJob(created);
       if (created.status === "FAILED" && created.validation.invalid_rows > 0) {
@@ -320,22 +336,24 @@ export default function PriceUpdate() {
         <div className="flex flex-wrap items-center gap-3">
           <input
             type="file"
-            accept=".csv,.txt,.text,text/csv,text/plain"
+            accept=".csv,.txt,.text,.xlsx,.sql,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="text-sm"
           />
-          <select
-            value={csvDelimiter}
-            onChange={(e) => setCsvDelimiter(e.target.value as PriceUpdateCsvDelimiter)}
-            className="rounded-md border border-slate-200 px-2 py-1.5 text-sm"
-            title="Separator kolumn w pliku CSV"
-          >
-            {CSV_DELIMITERS.map((d) => (
-              <option key={d.value} value={d.value}>
-                Separator: {d.label}
-              </option>
-            ))}
-          </select>
+          {!isXlsx && (
+            <select
+              value={csvDelimiter}
+              onChange={(e) => setCsvDelimiter(e.target.value as PriceUpdateCsvDelimiter)}
+              className="rounded-md border border-slate-200 px-2 py-1.5 text-sm"
+              title="Separator kolumn w pliku CSV"
+            >
+              {CSV_DELIMITERS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  Separator: {d.label}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             value={duplicateMode}
             onChange={(e) => setDuplicateMode(e.target.value as "error" | "last_wins")}
@@ -353,13 +371,47 @@ export default function PriceUpdate() {
             {creating ? "Uruchamianie..." : "Uruchom aktualizację"}
           </button>
         </div>
+
+        {isXlsx && (
+          <p className="mt-2 text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-3 py-1.5">
+            Plik XLSX — przetwarzane są arkusze z kolumnami <code>code</code> i <code>price</code>. Puste wiersze są pomijane.
+          </p>
+        )}
+        {isSql && (
+          <p className="mt-2 text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-3 py-1.5">
+            Plik SQL — wyciągam kody i ceny z instrukcji <code>INSERT INTO ... VALUES</code>.
+            Pliki <code>.csv</code>/<code>.txt</code> z treścią SQL są też rozpoznawane automatycznie.
+          </p>
+        )}
+
+        {isVariantMode && (
+          <label className="mt-3 flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={keepExtraVariants}
+              onChange={(e) => setKeepExtraVariants(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="text-sm text-slate-700">
+              Nie wyłączaj istniejących wariantów, których nie ma w pliku
+            </span>
+          </label>
+        )}
+
         <p className="mt-2 text-xs text-slate-500">
-          Pliki <code>.csv</code> lub <code>.txt</code> z nagłówkiem. Wymagane kolumny: <code>code</code>, <code>price</code>. Opcjonalne:{" "}
-          <code>currency</code>, <code>price_type</code>, <code>comment</code>.
+          {isXlsx
+            ? <>Plik <code>.xlsx</code> — przetwarzane są tylko arkusze z nagłówkiem zawierającym kolumny <code>code</code> i <code>price</code>. Pozostałe arkusze są pomijane.</>
+            : isSql
+            ? <>Plik <code>.sql</code> — wyciągam wiersze z <code>INSERT INTO ... VALUES(code, code, price, ...)</code>. Pliki <code>.csv</code>/<code>.txt</code> z treścią SQL są też wykrywane automatycznie.</>
+            : <>Plik <code>.csv</code> lub <code>.txt</code> z nagłówkiem. Wymagane kolumny: <code>code</code>, <code>price</code>. Opcjonalne: <code>currency</code>, <code>price_type</code>, <code>comment</code>.</>
+          }
           {isVariantMode ? (
             <>
               {" "}
-              W trybie wariantów <code>code</code> to kod wariantu. Po aktualizacji cen wyłączone zostaną warianty rozszerzone (extended) spoza pliku — tylko u produktów z co najmniej jednym wierszem w CSV. Produkty spoza pliku nie są wyłączane.
+              W trybie wariantów <code>code</code> to kod wariantu.{" "}
+              {keepExtraVariants
+                ? "Warianty spoza pliku pozostaną bez zmian."
+                : "Po aktualizacji cen wyłączone zostaną warianty rozszerzone (extended) spoza pliku — tylko u produktów z co najmniej jednym wierszem w CSV."}
             </>
           ) : null}
         </p>
@@ -412,10 +464,22 @@ export default function PriceUpdate() {
         <>
           <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
             <h3 className="text-sm font-semibold text-slate-700 mb-3">2) Postęp</h3>
+            {isJobTerminal ? (
+              <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-md px-3 py-2 mb-3">
+                Job zapisany na serwerze
+                {job.finished_at ? ` · zakończony ${job.finished_at.slice(0, 19).replace("T", " ")}` : ""}.
+                Logi i postęp są dostępne po restarcie — możesz pobrać pełny CSV poniżej.
+              </p>
+            ) : null}
             <p className="text-xs text-slate-500 mb-2">
               Tryb: {job.target_mode === "variant" ? "warianty" : "produkty"}
               {job.csv_delimiter
                 ? ` · separator: ${CSV_DELIMITERS.find((d) => d.value === job.csv_delimiter)?.label ?? job.csv_delimiter}`
+                : ""}
+              {job.target_mode === "variant"
+                ? job.disable_extra_variants === false
+                  ? " · warianty spoza pliku: zachowane"
+                  : " · warianty spoza pliku: wyłączane"
                 : ""}
             </p>
             <div className="w-full h-3 rounded-full bg-slate-100 overflow-hidden">

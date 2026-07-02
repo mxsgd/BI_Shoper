@@ -18,6 +18,51 @@ interface MappedGroup {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+function groupSubtitle(grp: { group_id: number; product_count: number }) {
+  return `id: ${grp.group_id} · ${grp.product_count} prod.`;
+}
+
+/** Shows a small popup with full text when truncated label is hovered. */
+function TruncateTooltip({ text, className = "" }: { text: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(check) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", check);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", check);
+    };
+  }, [text]);
+
+  return (
+    <span
+      className="relative block w-full min-w-0"
+      onMouseEnter={() => truncated && setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span ref={ref} className={`block truncate ${className}`}>
+        {text}
+      </span>
+      {open && truncated && (
+        <span
+          role="tooltip"
+          className="absolute z-50 left-0 top-full mt-1 px-2 py-1 text-[11px] leading-snug text-slate-700 bg-white border border-slate-200 rounded-md shadow-md max-w-[16rem] whitespace-normal pointer-events-none"
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function downloadCsv(rows: string[][], filename: string) {
   const text = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8;" });
@@ -136,6 +181,8 @@ export default function VariantCodes() {
   const [groupsLoading, setGroupsLoading] = useState(true);
   const [groupSearch, setGroupSearch] = useState("");
   const [selectedGroup, setSelectedGroup] = useState<VariantGroup | null>(null);
+  const [groupSyncing, setGroupSyncing] = useState(false);
+  const [groupSyncError, setGroupSyncError] = useState<string | null>(null);
 
   // ── Step 2: product picker ────────────────────────────────────────────────
   const [allProducts, setAllProducts] = useState<VariantProduct[]>([]);
@@ -160,17 +207,17 @@ export default function VariantCodes() {
   const [startError, setStartError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  // ── Load groups on mount ──────────────────────────────────────────────────
+  // ── Load groups on mount (sync names from /option-groups — fast) ───────
   useEffect(() => {
-    api.getVariantGroups()
+    api.getVariantGroups({ refresh: true })
       .then(setGroups)
       .catch(() => setGroups([]))
       .finally(() => setGroupsLoading(false));
   }, []);
 
-  // ── Load products when group selected ────────────────────────────────────
-  const loadProducts = useCallback(async (grp: VariantGroup) => {
-    setProdsLoading(true);
+  const selectGroup = useCallback(async (grp: VariantGroup) => {
+    setGroupSyncError(null);
+    setSelectedGroup(grp);
     setAllProducts([]);
     setSelectedIds(new Set());
     setProductSearch("");
@@ -178,27 +225,41 @@ export default function VariantCodes() {
     setDetectError(null);
     setJobId(null);
     setJob(null);
+
+    // 1. Show products from local DB immediately
+    setProdsLoading(true);
     try {
-      const prods = await api.searchVariantProducts({ group_id: grp.group_id, limit: 500 });
-      setAllProducts(prods);
+      const cached = await api.searchVariantProducts({ group_id: grp.group_id, limit: 500 });
+      setAllProducts(cached);
     } catch {
       setAllProducts([]);
     } finally {
       setProdsLoading(false);
     }
-  }, []);
 
-  const selectGroup = useCallback(
-    (grp: VariantGroup) => {
-      setSelectedGroup(grp);
-      void loadProducts(grp);
-    },
-    [loadProducts],
-  );
+    // 2. Refresh group + products from Shoper in background (no stocks — too slow)
+    setGroupSyncing(true);
+    try {
+      const res = await api.syncVariantGroup(grp.group_id);
+      setSelectedGroup(res.group);
+      setGroups((prev) => prev.map((g) => (g.group_id === res.group.group_id ? res.group : g)));
+      const fresh = await api.searchVariantProducts({ group_id: res.group.group_id, limit: 500 });
+      setAllProducts(fresh);
+    } catch (e) {
+      setGroupSyncError(e instanceof Error ? e.message : "Błąd synchronizacji zestawu");
+    } finally {
+      setGroupSyncing(false);
+    }
+  }, []);
 
   const filteredGroups = useMemo(() => {
     const q = groupSearch.trim().toLowerCase();
-    return q ? groups.filter((g) => g.name.toLowerCase().includes(q)) : groups;
+    if (!q) return groups;
+    return groups.filter(
+      (g) =>
+        g.name.toLowerCase().includes(q) ||
+        String(g.group_id).includes(q),
+    );
   }, [groups, groupSearch]);
 
   const filteredProducts = useMemo(() => {
@@ -422,13 +483,20 @@ export default function VariantCodes() {
             <div className="flex-1">
               <p className="text-sm font-semibold text-slate-800">Wybierz zestaw wariantów</p>
               {selectedGroup ? (
-                <p className="text-xs text-indigo-600 font-medium mt-0.5">
-                  {selectedGroup.name} — {selectedGroup.product_count} produktów
+                <p className="text-xs font-medium mt-0.5 flex items-center gap-1 min-w-0">
+                  <TruncateTooltip text={selectedGroup.name} className="text-indigo-600" />
+                  <span className="text-indigo-400 font-normal shrink-0">· {groupSubtitle(selectedGroup)}</span>
                 </p>
               ) : (
                 <p className="text-xs text-slate-400 mt-0.5">Wybierz grupę aby załadować produkty</p>
               )}
             </div>
+            {groupSyncing && (
+              <span className="text-xs text-slate-500 flex items-center gap-1.5">
+                <span className="w-3 h-3 border-2 border-slate-300 border-t-indigo-500 rounded-full animate-spin" />
+                Synchronizuję zestaw…
+              </span>
+            )}
             {selectedGroup && (
               <button
                 type="button"
@@ -457,7 +525,7 @@ export default function VariantCodes() {
                 className="w-full mb-3 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
               />
               {groupsLoading ? (
-                <p className="text-sm text-slate-400 py-4 text-center">Ładuję zestawy wariantów…</p>
+                <p className="text-sm text-slate-400 py-4 text-center">Ładuję nazwy zestawów…</p>
               ) : filteredGroups.length === 0 ? (
                 <p className="text-sm text-slate-400 py-6 text-center">Brak danych — uruchom pełną synchronizację</p>
               ) : (
@@ -466,15 +534,22 @@ export default function VariantCodes() {
                     <button
                       key={grp.group_id}
                       type="button"
-                      onClick={() => selectGroup(grp)}
-                      className="flex flex-col items-start gap-0.5 rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+                      onClick={() => void selectGroup(grp)}
+                      disabled={groupSyncing}
+                      className="flex flex-col items-start gap-0.5 rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-indigo-300 hover:bg-indigo-50 transition-colors disabled:opacity-50"
                     >
-                      <span className="text-sm font-medium text-slate-800 truncate w-full">{grp.name}</span>
-                      <span className="text-xs text-slate-400">{grp.product_count} prod.</span>
+                      <TruncateTooltip text={grp.name} className="text-sm font-medium text-slate-800" />
+                      <span className="text-xs text-slate-400">{groupSubtitle(grp)}</span>
                     </button>
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {groupSyncError && selectedGroup && (
+            <div className="mx-4 mb-4 text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+              {groupSyncError} — wyświetlam dane z lokalnej bazy.
             </div>
           )}
         </div>
@@ -490,6 +565,8 @@ export default function VariantCodes() {
                   <p className="text-xs text-indigo-600 font-medium mt-0.5">
                     Zaznaczono {selectedIds.size} {selectedIds.size === 1 ? "produkt" : "produktów"}
                   </p>
+                ) : groupSyncing ? (
+                  <p className="text-xs text-slate-500 mt-0.5">Odświeżam listę ze Shopera…</p>
                 ) : (
                   <p className="text-xs text-slate-400 mt-0.5">Zaznacz produkty do uzupełnienia</p>
                 )}

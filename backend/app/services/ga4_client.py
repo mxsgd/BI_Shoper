@@ -7,6 +7,7 @@ Set GA4_PROPERTY_ID and GA4_CREDENTIALS_PATH in .env.
 
 import logging
 from datetime import date, timedelta
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -14,6 +15,21 @@ from sqlalchemy import text
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_credentials_path(path: str) -> str:
+    """Resolve GA4 service account JSON — supports paths relative to backend/ or repo root."""
+    if not path:
+        return ""
+    p = Path(path)
+    if p.is_file():
+        return str(p.resolve())
+    backend_dir = Path(__file__).resolve().parents[2]
+    for base in (Path.cwd(), backend_dir, backend_dir.parent):
+        candidate = (base / path).resolve()
+        if candidate.is_file():
+            return str(candidate)
+    return path
 
 
 def _get_ga4_client():
@@ -24,12 +40,11 @@ def _get_ga4_client():
     )
 
     settings = get_settings()
-    if not settings.ga4_property_id or not settings.ga4_credentials_path:
+    creds_path = _resolve_credentials_path(settings.ga4_credentials_path)
+    if not settings.ga4_property_id or not creds_path:
         return None, None, None, None, None, None, None, None
 
-    client = BetaAnalyticsDataClient.from_service_account_json(
-        settings.ga4_credentials_path
-    )
+    client = BetaAnalyticsDataClient.from_service_account_json(creds_path)
     property_id = f"properties/{settings.ga4_property_id}"
     return client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter
 

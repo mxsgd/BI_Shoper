@@ -12,13 +12,17 @@ async function get<T>(path: string, params: Record<string, string | number | und
   return res.json();
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+async function post<T>(path: string, body: unknown = {}): Promise<T> {
+  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  const res = await fetch(`${BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
   return res.json();
 }
 
@@ -263,6 +267,7 @@ export interface TrafficFunnel {
 
 export interface TrafficData {
   has_data: boolean;
+  data_through?: string | null;
   focus_date?: string | null;
   overview: TrafficOverview | null;
   conversion: TrafficConversion | null;
@@ -381,6 +386,7 @@ export interface PriceUpdateJob {
   file_name: string;
   target_mode?: PriceUpdateTargetMode;
   csv_delimiter?: PriceUpdateCsvDelimiter;
+  disable_extra_variants?: boolean;
   status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
   created_at: string;
   started_at?: string | null;
@@ -435,6 +441,13 @@ export interface VariantGroup {
   group_id: number;
   name: string;
   product_count: number;
+}
+
+export interface SyncVariantGroupResult {
+  group: VariantGroup;
+  group_synced: number;
+  products: number;
+  stocks: number;
 }
 
 export interface VariantProduct {
@@ -539,6 +552,7 @@ export const api = {
       duplicate_mode?: "error" | "last_wins";
       target_mode?: PriceUpdateTargetMode;
       csv_delimiter?: PriceUpdateCsvDelimiter;
+      disable_extra_variants?: boolean;
     } = {},
   ) => {
     const form = new FormData();
@@ -547,10 +561,12 @@ export const api = {
       duplicate_mode: options.duplicate_mode ?? "error",
       target_mode: options.target_mode ?? "product",
       csv_delimiter: options.csv_delimiter ?? "semicolon",
+      disable_extra_variants: String(options.disable_extra_variants ?? true),
     });
   },
   getPriceUpdateJob: (jobId: string) => get<PriceUpdateJob>(`/price-update/jobs/${jobId}`),
   getActivePriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/active"),
+  getLatestPriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/latest"),
   getPriceUpdateLogs: (
     jobId: string,
     params: {
@@ -564,8 +580,10 @@ export const api = {
   getPriceUpdateLogsExportUrl: (jobId: string) => `${BASE}/price-update/jobs/${jobId}/logs/export.csv`,
 
   // Variant code generator
-  getVariantGroups: () =>
-    get<VariantGroup[]>("/variant-codes/groups"),
+  getVariantGroups: (params: { refresh?: boolean } = {}) =>
+    get<VariantGroup[]>("/variant-codes/groups", { refresh: params.refresh ? 1 : undefined }),
+  syncVariantGroup: (groupId: number) =>
+    post<SyncVariantGroupResult>(`/variant-codes/groups/${groupId}/sync`),
   searchVariantProducts: (params: { q?: string; group_id?: number; limit?: number } = {}) =>
     get<VariantProduct[]>("/variant-codes/search-products", params),
   getProductVariantStocks: (productId: number) =>

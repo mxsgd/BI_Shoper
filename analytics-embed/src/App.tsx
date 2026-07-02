@@ -107,7 +107,7 @@ function Sidebar() {
                 onClick={() => void handleRefresh("quick")}
                 disabled={isRefreshing}
                 className="inline-flex items-center gap-1 rounded-l-md border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                title="Szybkie odświeżenie — tylko nowe zamówienia + transform (sekundy)"
+                title="Szybkie odświeżenie — zamówienia + GA4 + transform"
               >
                 {isRefreshing ? (
                   <>
@@ -140,8 +140,8 @@ function Sidebar() {
                   onClick={() => void handleRefresh("quick")}
                   className="w-full text-left px-3 py-2 text-slate-200 hover:bg-slate-700 transition-colors"
                 >
-                  <p className="font-medium">Szybka (zamówienia)</p>
-                  <p className="text-slate-400 text-[10px] mt-0.5">Tylko nowe zamówienia + transform — sekundy</p>
+                  <p className="font-medium">Szybka (zamówienia + GA4)</p>
+                  <p className="text-slate-400 text-[10px] mt-0.5">Nowe zamówienia, ruch GA4, transform — zwykle do 2 min</p>
                 </button>
                 <button
                   type="button"
@@ -160,7 +160,7 @@ function Sidebar() {
         ) : syncDone ? (
           <p className="mt-2 text-[11px] text-emerald-400">Synchronizacja zakończona ✓</p>
         ) : isRefreshing ? (
-          <p className="mt-2 text-[11px] text-slate-400">Pobieranie nowych zamówień…</p>
+          <p className="mt-2 text-[11px] text-slate-400">Synchronizacja (zamówienia + GA4)…</p>
         ) : null}
       </div>
       <nav className="flex-1 py-4 space-y-1 px-3">

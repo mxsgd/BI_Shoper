@@ -37,6 +37,7 @@ MAX_LOGS_IN_MEMORY = 5_000
 MAX_JOBS_IN_MEMORY = 3
 BULK_JOB_ROW_THRESHOLD = 500  # powyżej: bez logu per wiersz SKIPPED (cena bez zmian)
 DEFAULT_LOCALE = os.getenv("SHOPER_DEFAULT_LOCALE", "pl_PL")
+PRICE_UPDATE_CONCURRENCY = int(os.getenv("PRICE_UPDATE_CONCURRENCY", "8"))
 
 
 @dataclass
@@ -95,6 +96,7 @@ class PriceUpdateJob:
     logs: list[PriceUpdateLogEntry] = field(default_factory=list)
     validation_errors: list[ValidationError] = field(default_factory=list)
     fatal_error: str | None = None
+    disable_extra_variants: bool = True
     codes_in_file: set[str] = field(default_factory=set)
     product_ids_in_file: set[int] = field(default_factory=set)
     log_seq: int = 0
@@ -103,6 +105,8 @@ class PriceUpdateJob:
     current_row_number: int | None = None
     current_code: str | None = None
     current_phase: str | None = None  # row | post_process
+    duplicate_mode: str = "error"
+    _last_persist_ts: float | None = field(default=None, repr=False, compare=False)
 
 
 def _now_iso() -> str:
@@ -151,7 +155,7 @@ def _parse_csv_rows(
         comment = (rec.get("comment") or "").strip() or None
 
         if not code:
-            errors.append(ValidationError(row_number=idx, code="", error_message="Code is required"))
+            # Puste wiersze (np. końcowe wiersze arkusza Excel) — pomijaj cicho
             continue
         try:
             price = _parse_price(raw_price)
@@ -254,6 +258,25 @@ class PriceUpdateJobManager:
     def __init__(self):
         self._jobs: dict[str, PriceUpdateJob] = {}
         self._lock = asyncio.Lock()
+        self._persist_lock = asyncio.Lock()
+
+    async def _persist_job(self, job: PriceUpdateJob, *, force: bool = False) -> None:
+        from . import price_update_persistence as persist
+
+        now = datetime.now(timezone.utc).timestamp()
+        if not force and job._last_persist_ts and now - job._last_persist_ts < 2.0:
+            return
+        async with self._persist_lock:
+            await persist.save_job(job, duplicate_mode=job.duplicate_mode)
+        job._last_persist_ts = now
+
+    async def _persist_log(self, job: PriceUpdateJob, entry: PriceUpdateLogEntry) -> None:
+        from . import price_update_persistence as persist
+
+        try:
+            await persist.save_log(entry, seq=job.log_seq)
+        except Exception:
+            pass  # nie przerywaj joba przy błędzie zapisu logu
 
     async def create_job(
         self,
@@ -264,6 +287,7 @@ class PriceUpdateJobManager:
         duplicate_mode: Literal["error", "last_wins"] = "error",
         target_mode: TargetMode = "product",
         csv_delimiter: CsvDelimiter = "semicolon",
+        disable_extra_variants: bool = True,
     ) -> PriceUpdateJob:
         if len(csv_bytes) > MAX_FILE_BYTES:
             raise ValueError(f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB)")
@@ -282,6 +306,8 @@ class PriceUpdateJobManager:
             created_at=_now_iso(),
             target_mode=target_mode,
             csv_delimiter=csv_delimiter,
+            disable_extra_variants=disable_extra_variants,
+            duplicate_mode=duplicate_mode,
             rows=rows,
             total=len(rows),
             validation_errors=validation_errors,
@@ -294,14 +320,22 @@ class PriceUpdateJobManager:
         if validation_errors:
             job.status = "FAILED"
             job.fatal_error = "Validation failed"
+            job.finished_at = _now_iso()
+            await self._persist_job(job, force=True)
             return job
 
+        await self._persist_job(job, force=True)
         asyncio.create_task(self._run_job(job.job_id))
         return job
 
     async def get_job(self, job_id: str) -> PriceUpdateJob | None:
         async with self._lock:
-            return self._jobs.get(job_id)
+            mem = self._jobs.get(job_id)
+            if mem is not None:
+                return mem
+        from . import price_update_persistence as persist
+
+        return await persist.load_job(job_id)
 
     async def get_active_job(self, store_id: int) -> PriceUpdateJob | None:
         async with self._lock:
@@ -310,10 +344,95 @@ class PriceUpdateJobManager:
                 for j in self._jobs.values()
                 if j.store_id == store_id and j.status in ("PENDING", "RUNNING")
             ]
-            if not active:
-                return None
-            active.sort(key=lambda j: j.started_at or j.created_at, reverse=True)
-            return active[0]
+            if active:
+                active.sort(key=lambda j: j.started_at or j.created_at, reverse=True)
+                return active[0]
+        from . import price_update_persistence as persist
+
+        return await persist.load_active_job(store_id)
+
+    async def get_latest_job(self, store_id: int) -> PriceUpdateJob | None:
+        async with self._lock:
+            all_jobs = [j for j in self._jobs.values() if j.store_id == store_id]
+            if all_jobs:
+                all_jobs.sort(key=lambda j: j.created_at, reverse=True)
+                return all_jobs[0]
+        from . import price_update_persistence as persist
+
+        return await persist.load_latest_job(store_id)
+
+    async def get_logs(
+        self,
+        job_id: str,
+        *,
+        status: Literal["ALL", "SUCCESS", "ERROR", "WARNING", "SKIPPED"] = "ALL",
+        query: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+        tail: int | None = None,
+    ) -> tuple[list[PriceUpdateLogEntry], int, int, int]:
+        """Zwraca (items, total, pages_or_1, logs_dropped)."""
+        job = await self.get_job(job_id)
+        if job is None:
+            return [], 0, 1, 0
+
+        use_memory = False
+        mem_job: PriceUpdateJob | None = None
+        mem: PriceUpdateJob | None = None
+        async with self._lock:
+            mem = self._jobs.get(job_id)
+            if mem is not None and mem.status in ("PENDING", "RUNNING"):
+                use_memory = True
+                mem_job = mem
+        if use_memory and mem_job is not None:
+            logs = mem_job.logs[-tail:] if tail is not None else list(mem_job.logs)
+            if status != "ALL":
+                logs = [l for l in logs if l.status == status]
+            if query:
+                q = query.strip().lower()
+                logs = [l for l in logs if q in l.code.lower()]
+            total = mem_job.log_seq if tail is not None else len(logs)
+            if tail is None:
+                start = (page - 1) * per_page
+                items = logs[start : start + per_page]
+                pages = (len(logs) + per_page - 1) // per_page if logs else 1
+            else:
+                items = logs
+                pages = 1
+            return items, total, pages, mem_job.logs_dropped
+
+        from . import price_update_persistence as persist
+
+        items, total, dropped = await persist.load_logs(
+            job_id,
+            status=status,
+            query=query,
+            page=page,
+            per_page=per_page,
+            tail=tail,
+        )
+        if not items and mem is not None and mem.logs:
+            logs = mem.logs[-tail:] if tail is not None else list(mem.logs)
+            if status != "ALL":
+                logs = [l for l in logs if l.status == status]
+            if query:
+                q = query.strip().lower()
+                logs = [l for l in logs if q in l.code.lower()]
+            total = mem.log_seq if tail is not None else len(logs)
+            if tail is None:
+                start = (page - 1) * per_page
+                items = logs[start : start + per_page]
+                pages = (len(logs) + per_page - 1) // per_page if logs else 1
+            else:
+                items = logs
+                pages = 1
+            dropped = mem.logs_dropped
+            return items, total, pages, dropped
+        if tail is not None:
+            pages = 1
+        else:
+            pages = (total + per_page - 1) // per_page if total else 1
+        return items, total, pages, dropped
 
     def _set_progress(
         self,
@@ -326,6 +445,7 @@ class PriceUpdateJobManager:
         job.current_phase = phase
         job.current_code = code
         job.current_row_number = row_number
+        asyncio.create_task(self._persist_job(job))
 
     def _clear_progress(self, job: PriceUpdateJob) -> None:
         job.current_phase = None
@@ -364,6 +484,48 @@ class PriceUpdateJobManager:
             if pid or raw.get("code") is not None:
                 return raw
         return None
+
+    async def _build_stock_cache(
+        self,
+        db: AsyncSession,
+        store_id: int,
+        codes: set[str],
+    ) -> dict[str, dict]:
+        """Bulk-fetch stock data from local DB for all codes in file.
+
+        Ładuje WSZYSTKIE stocki sklepu (nie filtruje po kodzie — unika limitu 32767
+        parametrów asyncpg przy dużych plikach). Filtruje do żądanych kodów w Pythonie.
+        Falls back to API for codes missing from local DB.
+        """
+        if not codes:
+            return {}
+        result = await db.execute(
+            select(
+                RawProductStock.stock_id,
+                RawProductStock.product_id,
+                RawProductStock.code,
+                RawProductStock.price,
+                RawProductStock.extended,
+                RawProductStock.active,
+                RawProductStock.default,
+            ).where(RawProductStock.store_id == store_id)
+        )
+        cache: dict[str, dict] = {}
+        for row in result:
+            code = row.code
+            if not code or code not in codes:
+                continue
+            cache[code] = {
+                "stock_id": row.stock_id,
+                "id": row.stock_id,
+                "product_id": row.product_id,
+                "code": code,
+                "price": float(row.price or 0),
+                "extended": row.extended,
+                "active": row.active,
+                "default": row.default,
+            }
+        return cache
 
     async def _resolve_stock_live(
         self,
@@ -427,6 +589,7 @@ class PriceUpdateJobManager:
         job.status = "RUNNING"
         job.started_at = _now_iso()
         job.started_at_ts = datetime.now(timezone.utc).timestamp()
+        await self._persist_job(job, force=True)
 
         async with async_session() as db:
             store = (
@@ -463,39 +626,39 @@ class PriceUpdateJobManager:
             product_min_in_file: dict[int, tuple[str, float]] = {}
             try:
                 if job.target_mode == "variant":
-                    last_product_id: int | None = None
                     post_processed: set[int] = set()
 
-                    for row in job.rows:
-                        self._set_progress(
-                            job, phase="row", code=row.code, row_number=row.row_number
-                        )
-                        try:
-                            row_pid = await self._process_variant_row(
-                                db, client, job, row, product_min_in_file
+                    # Wczytaj cache kodów z lokalnej DB (eliminuje GET /product-stocks?code=X per wiersz)
+                    cache = await self._build_stock_cache(db, job.store_id, job.codes_in_file)
+
+                    # Równoległe przetwarzanie wierszy z ograniczeniem do PRICE_UPDATE_CONCURRENCY
+                    sem = asyncio.Semaphore(PRICE_UPDATE_CONCURRENCY)
+                    _auth_exc: list[Exception] = []
+
+                    async def _process_one(row: PriceUpdateRow) -> int | None:
+                        async with sem:
+                            if _auth_exc:
+                                return None
+                            self._set_progress(
+                                job, phase="row", code=row.code, row_number=row.row_number
                             )
-                        except (ShoperUnauthorizedError, ShoperAuthError):
-                            raise
-                        except Exception as exc:
-                            await self._log_row_crash(job, row, exc)
-                            row_pid = None
+                            try:
+                                return await self._process_variant_row(
+                                    db, client, job, row, product_min_in_file, cache=cache
+                                )
+                            except (ShoperUnauthorizedError, ShoperAuthError) as exc:
+                                _auth_exc.append(exc)
+                                return None
+                            except Exception as exc:
+                                await self._log_row_crash(job, row, exc)
+                                return None
 
-                        # Streaming: gdy produkt się zmienia, natychmiast post-procesuj poprzedni
-                        if row_pid is not None and last_product_id is not None and row_pid != last_product_id:
-                            if last_product_id not in post_processed:
-                                code = product_min_in_file.get(last_product_id, ("", 0))[0] or f"id={last_product_id}"
-                                self._set_progress(job, phase="post_process", code=code)
-                                try:
-                                    await self._post_process_single_product(
-                                        client, job, last_product_id, product_min_in_file
-                                    )
-                                except (ShoperUnauthorizedError, ShoperAuthError):
-                                    raise
-                                post_processed.add(last_product_id)
-                        if row_pid is not None:
-                            last_product_id = row_pid
+                    await asyncio.gather(*[_process_one(row) for row in job.rows])
 
-                    # Post-process ostatniego produktu i tych które (rzadki przypadek) nie były zgrupowane
+                    if _auth_exc:
+                        raise _auth_exc[0]
+
+                    # Post-process wszystkich produktów (po zakończeniu fazy równoległej)
                     for product_id in job.product_ids_in_file:
                         if product_id not in post_processed:
                             code = product_min_in_file.get(product_id, ("", 0))[0] or f"id={product_id}"
@@ -510,6 +673,7 @@ class PriceUpdateJobManager:
                                 await self._log_post_process_crash(
                                     job, exc, label=f"post-process produkt {product_id}"
                                 )
+                            post_processed.add(product_id)
 
                 else:
                     for row in job.rows:
@@ -550,6 +714,7 @@ class PriceUpdateJobManager:
                 job.rows = []
                 job.codes_in_file = set()
                 await client.close()
+                await self._persist_job(job, force=True)
 
     async def _log_row_crash(
         self, job: PriceUpdateJob, row: PriceUpdateRow, exc: Exception
@@ -738,9 +903,15 @@ class PriceUpdateJobManager:
         job: PriceUpdateJob,
         row: PriceUpdateRow,
         product_min_in_file: dict[int, tuple[str, float]],
+        *,
+        cache: dict[str, dict] | None = None,
     ) -> int | None:
         """Zwraca product_id jeśli wiersz zostal przetworzony, None jeśli nie znaleziono."""
-        live = await self._resolve_stock_live(client, db, job.store_id, row.code)
+        # DB-first lookup: eliminuje GET /product-stocks?code=X dla znanych kodów
+        if cache is not None and row.code in cache:
+            live = cache[row.code]
+        else:
+            live = await self._resolve_stock_live(client, db, job.store_id, row.code)
         if live is None:
             await self._add_log(
                 job,
@@ -840,14 +1011,15 @@ class PriceUpdateJobManager:
             raise
         except Exception as exc:
             await self._log_post_process_crash(job, exc, label=f"aktywacja {product_id}")
-        try:
-            await self._deactivate_variants_not_in_file_for_product(
-                client, job, product_id, product_min_in_file, reason="po aktywacji"
-            )
-        except (ShoperUnauthorizedError, ShoperAuthError):
-            raise
-        except Exception as exc:
-            await self._log_post_process_crash(job, exc, label=f"dezaktywacja wariantów {product_id}")
+        if job.disable_extra_variants:
+            try:
+                await self._deactivate_variants_not_in_file_for_product(
+                    client, job, product_id, product_min_in_file, reason="po aktywacji"
+                )
+            except (ShoperUnauthorizedError, ShoperAuthError):
+                raise
+            except Exception as exc:
+                await self._log_post_process_crash(job, exc, label=f"dezaktywacja wariantów {product_id}")
 
     async def _apply_single_product_price(
         self,
@@ -1238,6 +1410,8 @@ class PriceUpdateJobManager:
         if overflow > 0:
             del job.logs[:overflow]
             job.logs_dropped += overflow
+        asyncio.create_task(self._persist_log(job, entry))
+        asyncio.create_task(self._persist_job(job))
 
     def _should_log_skipped_row(self, job: PriceUpdateJob, message: str) -> bool:
         """Duże pliki: nie zapisuj tysięcy identycznych SKIPPED w pamięci."""
