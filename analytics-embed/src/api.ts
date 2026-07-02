@@ -267,6 +267,7 @@ export interface TrafficFunnel {
 
 export interface TrafficData {
   has_data: boolean;
+  data_through?: string | null;
   focus_date?: string | null;
   overview: TrafficOverview | null;
   conversion: TrafficConversion | null;
@@ -385,6 +386,7 @@ export interface PriceUpdateJob {
   file_name: string;
   target_mode?: PriceUpdateTargetMode;
   csv_delimiter?: PriceUpdateCsvDelimiter;
+  disable_extra_variants?: boolean;
   status: "PENDING" | "RUNNING" | "DONE" | "FAILED" | "CANCELLED";
   created_at: string;
   started_at?: string | null;
@@ -550,6 +552,7 @@ export const api = {
       duplicate_mode?: "error" | "last_wins";
       target_mode?: PriceUpdateTargetMode;
       csv_delimiter?: PriceUpdateCsvDelimiter;
+      disable_extra_variants?: boolean;
     } = {},
   ) => {
     const form = new FormData();
@@ -558,10 +561,12 @@ export const api = {
       duplicate_mode: options.duplicate_mode ?? "error",
       target_mode: options.target_mode ?? "product",
       csv_delimiter: options.csv_delimiter ?? "semicolon",
+      disable_extra_variants: String(options.disable_extra_variants ?? true),
     });
   },
   getPriceUpdateJob: (jobId: string) => get<PriceUpdateJob>(`/price-update/jobs/${jobId}`),
   getActivePriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/active"),
+  getLatestPriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/latest"),
   getPriceUpdateLogs: (
     jobId: string,
     params: {

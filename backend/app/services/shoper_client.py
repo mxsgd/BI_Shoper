@@ -11,6 +11,7 @@ Usage:
 import json
 import asyncio
 import logging
+import os
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -21,7 +22,7 @@ DEFAULT_PER_PAGE = 100
 DEFAULT_TIMEOUT = 15.0
 MAX_RETRIES = 5
 RETRY_DELAY = 5.0
-RATE_DELAY = 0.12
+RATE_DELAY = float(os.getenv("SHOPER_RATE_DELAY", "0.05"))
 
 
 class ShoperUnauthorizedError(RuntimeError):

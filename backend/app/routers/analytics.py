@@ -931,9 +931,14 @@ async def traffic(
         "SELECT EXISTS (SELECT 1 FROM raw_ga4_traffic WHERE date >= :since)"
     ), {"since": since})).scalar()
 
+    data_through = (await db.execute(text(
+        "SELECT MAX(date) FROM raw_ga4_traffic"
+    ))).scalar()
+
     if not has_ga4:
         return {
             "has_data": False,
+            "data_through": str(data_through) if data_through else None,
             "overview": None, "conversion": None, "time_series": [],
             "sources": [], "top_pages": [], "geo": [], "devices": [],
             "funnel": None,
@@ -1142,6 +1147,7 @@ async def traffic(
 
     return {
         "has_data": True,
+        "data_through": str(data_through) if data_through else None,
         "focus_date": str(focus_date) if focus_date else None,
         "overview": {
             "sessions": sessions_total,

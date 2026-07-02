@@ -10,6 +10,16 @@ import { LineHitDot } from "../components/ChartHitDot";
 
 const DEVICE_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"];
 
+function deviceLabel(category: string): string {
+  const map: Record<string, string> = {
+    mobile: "Mobile",
+    desktop: "Desktop",
+    tablet: "Tablet",
+    "smart tv": "Smart TV",
+  };
+  return map[category.toLowerCase()] ?? category;
+}
+
 const PERIODS = [
   { value: 7, label: "7D" },
   { value: 30, label: "30D" },
@@ -50,15 +60,24 @@ export default function Traffic() {
       <div>
         <h2 className="text-2xl font-bold mb-1">Ruch na stronie</h2>
         <div className="mt-8 bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
-          <p className="text-amber-800 font-medium">Brak danych GA4</p>
+          <p className="text-amber-800 font-medium">Brak danych GA4 w wybranym okresie</p>
           <p className="text-sm text-amber-600 mt-1">
-            Ustaw GA4_PROPERTY_ID i GA4_CREDENTIALS_PATH w backend/.env, zrestartuj serwer
-            (sync uzupełnia brakujące dni z ostatnich 90 dni) lub kliknij „Odśwież” w menu.
+            Ustaw GA4_PROPERTY_ID i GA4_CREDENTIALS_PATH w backend/.env, zainstaluj{" "}
+            <code className="text-xs">google-analytics-data</code> w venv, a następnie kliknij „Odśwież”
+            (szybkie odświeżenie pobiera też dane GA4).
           </p>
+          {data.data_through && (
+            <p className="text-xs text-amber-500 mt-2">Ostatnie dane w bazie: {data.data_through}</p>
+          )}
         </div>
       </div>
     );
   }
+
+  const dataLagDays = data.data_through
+    ? Math.floor((Date.now() - new Date(data.data_through + "T12:00:00").getTime()) / 86400000)
+    : null;
+  const dataStale = dataLagDays !== null && dataLagDays > 1;
 
   const ov = data.overview!;
   const conv = data.conversion!;
@@ -68,10 +87,22 @@ export default function Traffic() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold">Ruch na stronie</h2>
-          <p className="text-sm text-slate-500">Dane z Google Analytics 4 + konwersja Shoper</p>
+          <p className="text-sm text-slate-500">
+            Dane z Google Analytics 4 + konwersja Shoper
+            {data.data_through && (
+              <span className="text-slate-400"> · dane do {data.data_through}</span>
+            )}
+          </p>
         </div>
         <PeriodSelector value={period} onChange={setPeriodAndClear} />
       </div>
+
+      {dataStale && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+          Dane GA4 są nieaktualne (ostatni dzień: {data.data_through}). Kliknij „Odśwież” w menu —
+          szybkie odświeżenie pobiera też ruch z GA4.
+        </div>
+      )}
 
       <FocusBanner
         selectedDate={selectedDate}
@@ -141,6 +172,82 @@ export default function Traffic() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Geographic */}
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">Geografia</h3>
+          <div className="overflow-auto max-h-64">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-white">
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="pb-2">Kraj</th>
+                  <th className="pb-2">Miasto</th>
+                  <th className="pb-2 text-right">Sesje</th>
+                  <th className="pb-2 text-right">Użytk.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.geo.map((g, i) => (
+                  <tr key={i} className="border-t border-slate-50">
+                    <td className="py-1.5">{g.country}</td>
+                    <td className="py-1.5 text-slate-600">{g.city}</td>
+                    <td className="py-1.5 text-right">{g.sessions.toLocaleString("pl-PL")}</td>
+                    <td className="py-1.5 text-right">{g.users.toLocaleString("pl-PL")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Device Split */}
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">Urządzenia</h3>
+          {data.devices.length > 0 ? (
+            <div className="overflow-visible">
+              <ResponsiveContainer width="100%" height={280}>
+                <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                  <Pie
+                    data={data.devices}
+                    dataKey="sessions"
+                    nameKey="device_category"
+                    cx="50%"
+                    cy="45%"
+                    innerRadius={48}
+                    outerRadius={78}
+                    label={false}
+                  >
+                    {data.devices.map((_, i) => (
+                      <Cell key={i} fill={DEVICE_COLORS[i % DEVICE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(v, _name, item) => {
+                      const d = item.payload as { device_category: string; pct: number };
+                      return [
+                        `${Number(v ?? 0).toLocaleString("pl-PL")} sesji (${d.pct}%)`,
+                        deviceLabel(d.device_category),
+                      ];
+                    }}
+                  />
+                  <Legend
+                    verticalAlign="bottom"
+                    align="center"
+                    wrapperStyle={{ paddingTop: 12 }}
+                    formatter={(value, entry) => {
+                      const d = entry.payload as { device_category: string; pct: number; sessions: number };
+                      return `${deviceLabel(d.device_category)} — ${d.pct}%`;
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">Brak danych</p>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* Traffic Sources */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
           <h3 className="text-sm font-semibold text-slate-700 mb-3">Źródła ruchu</h3>
@@ -196,65 +303,6 @@ export default function Traffic() {
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Geographic */}
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Geografia</h3>
-          <div className="overflow-auto max-h-64">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-white">
-                <tr className="text-left text-slate-500 border-b border-slate-200">
-                  <th className="pb-2">Kraj</th>
-                  <th className="pb-2">Miasto</th>
-                  <th className="pb-2 text-right">Sesje</th>
-                  <th className="pb-2 text-right">Użytk.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.geo.map((g, i) => (
-                  <tr key={i} className="border-t border-slate-50">
-                    <td className="py-1.5">{g.country}</td>
-                    <td className="py-1.5 text-slate-600">{g.city}</td>
-                    <td className="py-1.5 text-right">{g.sessions.toLocaleString("pl-PL")}</td>
-                    <td className="py-1.5 text-right">{g.users.toLocaleString("pl-PL")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Device Split */}
-        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Urządzenia</h3>
-          {data.devices.length > 0 ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={data.devices}
-                  dataKey="sessions"
-                  nameKey="device_category"
-                  cx="50%" cy="50%"
-                  innerRadius={50} outerRadius={90}
-                  label={(props: { payload?: { device_category?: string; pct?: number }; device_category?: string; pct?: number }) => {
-                    const p = props.payload ?? props;
-                    return `${p.device_category ?? ""} ${p.pct ?? 0}%`;
-                  }}
-                >
-                  {data.devices.map((_, i) => (
-                    <Cell key={i} fill={DEVICE_COLORS[i % DEVICE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v) => Number(v ?? 0).toLocaleString("pl-PL")} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-sm text-slate-400">Brak danych</p>
-          )}
         </div>
       </div>
     </div>

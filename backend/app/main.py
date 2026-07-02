@@ -17,6 +17,8 @@ from .services.transform_service import TransformService
 # Import all models to register them with SQLAlchemy
 from .models import (
     Store,
+    PriceUpdateJobRecord,
+    PriceUpdateLogRecord,
     RawOrder, RawOrderItem, RawProduct, RawCustomer,
     RawPayment, RawShipping, RawCategory, RawDiscount, RawStatus,
     RawProducer, RawTax, RawProductStock, RawParcel, RawUserGroup, RawCurrency,

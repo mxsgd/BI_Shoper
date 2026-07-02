@@ -1,6 +1,7 @@
 """Models package - RAW (staging) and CORE (star schema) layers."""
 # Store config (multi-store support)
 from .store import Store
+from .price_update_job import PriceUpdateJobRecord, PriceUpdateLogRecord
 
 # RAW layer (staging - 1:1 with Shoper API)
 from .raw import (
@@ -49,6 +50,8 @@ from .traffic import TrafficStats
 __all__ = [
     # Store
     "Store",
+    "PriceUpdateJobRecord",
+    "PriceUpdateLogRecord",
     # RAW layer
     "RawOrder",
     "RawOrderItem",

@@ -293,8 +293,8 @@ async def run_sync_now(
     """
     Run one or more sync phases; used by scheduler hooks and HTTP API.
 
-    scope="quick"  — orders (incremental since last sync) + transform only.
-                     Fast: typically finishes in seconds. Use for the UI refresh button.
+    scope="quick"  — orders (incremental) + transform + GA4 (today/yesterday + brakujące dni).
+                     Fast: typically finishes in seconds to ~2 min. Use for the UI refresh button.
     scope="all"    — full sync of every phase (slow, use the scheduler or manual admin action).
     """
     lock = _get_sync_lock(store_id)
@@ -328,7 +328,7 @@ async def run_sync_now(
                 out["reference"] = await run_reference_sync(store_id)
             if scope in ("all", "quick", "transform"):
                 out["transform"] = await run_transform()
-            if scope in ("all", "ga4"):
+            if scope in ("all", "quick", "ga4"):
                 out["ga4"] = await run_ga4_sync()
 
             _sync_statuses[_sync_key(store_id)] = {

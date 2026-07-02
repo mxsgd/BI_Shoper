@@ -269,8 +269,8 @@ class SyncService:
     # Product Groups / Zestawy wariantów (reference data)
     # ------------------------------------------------------------------
     async def sync_product_groups(self) -> int:
-        """Fetch all product groups (zestawy wariantów) and upsert into raw_product_groups."""
-        items = await self.client.get_all("/product-groups")
+        """Fetch zestawy wariantów from /option-groups and upsert into raw_product_groups."""
+        items = await self.client.get_all("/option-groups")
         count = 0
         for g in items:
             row = _shoper_product_group_to_raw_row(self.store.id, g)
@@ -286,17 +286,17 @@ class SyncService:
             await self.db.execute(stmt)
             count += 1
         await self.db.commit()
-        logger.info("Synced %d product groups for store %s", count, self.store.name)
+        logger.info("Synced %d option-groups (zestawy wariantów) for store %s", count, self.store.name)
         return count
 
     async def sync_product_group_by_id(self, group_id: int) -> bool:
-        """Fetch one product group (zestaw wariantów) and upsert metadata."""
-        g = await self.client.get(f"/product-groups/{group_id}")
+        """Fetch one zestaw wariantów from /option-groups/{id} and upsert metadata."""
+        g = await self.client.get(f"/option-groups/{group_id}")
         if not g:
-            items = await self.client.get_filtered("/product-groups", {"group_id": group_id})
+            items = await self.client.get_filtered("/option-groups", {"group_id": group_id})
             g = items[0] if items else None
         if not g:
-            logger.warning("Product group %s not found in Shoper for store %s", group_id, self.store.name)
+            logger.warning("Option group %s not found in Shoper for store %s", group_id, self.store.name)
             return False
         row = _shoper_product_group_to_raw_row(self.store.id, g)
         if not row:

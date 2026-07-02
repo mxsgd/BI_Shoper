@@ -22,6 +22,47 @@ function groupSubtitle(grp: { group_id: number; product_count: number }) {
   return `id: ${grp.group_id} · ${grp.product_count} prod.`;
 }
 
+/** Shows a small popup with full text when truncated label is hovered. */
+function TruncateTooltip({ text, className = "" }: { text: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(check) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", check);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", check);
+    };
+  }, [text]);
+
+  return (
+    <span
+      className="relative block w-full min-w-0"
+      onMouseEnter={() => truncated && setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span ref={ref} className={`block truncate ${className}`}>
+        {text}
+      </span>
+      {open && truncated && (
+        <span
+          role="tooltip"
+          className="absolute z-50 left-0 top-full mt-1 px-2 py-1 text-[11px] leading-snug text-slate-700 bg-white border border-slate-200 rounded-md shadow-md max-w-[16rem] whitespace-normal pointer-events-none"
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function downloadCsv(rows: string[][], filename: string) {
   const text = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8;" });
@@ -166,9 +207,9 @@ export default function VariantCodes() {
   const [startError, setStartError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  // ── Load groups on mount (names from local DB; fast) ───────────────────
+  // ── Load groups on mount (sync names from /option-groups — fast) ───────
   useEffect(() => {
-    api.getVariantGroups()
+    api.getVariantGroups({ refresh: true })
       .then(setGroups)
       .catch(() => setGroups([]))
       .finally(() => setGroupsLoading(false));
@@ -442,9 +483,9 @@ export default function VariantCodes() {
             <div className="flex-1">
               <p className="text-sm font-semibold text-slate-800">Wybierz zestaw wariantów</p>
               {selectedGroup ? (
-                <p className="text-xs text-indigo-600 font-medium mt-0.5">
-                  {selectedGroup.name}
-                  <span className="text-indigo-400 font-normal"> · {groupSubtitle(selectedGroup)}</span>
+                <p className="text-xs font-medium mt-0.5 flex items-center gap-1 min-w-0">
+                  <TruncateTooltip text={selectedGroup.name} className="text-indigo-600" />
+                  <span className="text-indigo-400 font-normal shrink-0">· {groupSubtitle(selectedGroup)}</span>
                 </p>
               ) : (
                 <p className="text-xs text-slate-400 mt-0.5">Wybierz grupę aby załadować produkty</p>
@@ -484,7 +525,7 @@ export default function VariantCodes() {
                 className="w-full mb-3 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
               />
               {groupsLoading ? (
-                <p className="text-sm text-slate-400 py-4 text-center">Ładuję zestawy wariantów…</p>
+                <p className="text-sm text-slate-400 py-4 text-center">Ładuję nazwy zestawów…</p>
               ) : filteredGroups.length === 0 ? (
                 <p className="text-sm text-slate-400 py-6 text-center">Brak danych — uruchom pełną synchronizację</p>
               ) : (
@@ -497,7 +538,7 @@ export default function VariantCodes() {
                       disabled={groupSyncing}
                       className="flex flex-col items-start gap-0.5 rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-indigo-300 hover:bg-indigo-50 transition-colors disabled:opacity-50"
                     >
-                      <span className="text-sm font-medium text-slate-800 truncate w-full">{grp.name}</span>
+                      <TruncateTooltip text={grp.name} className="text-sm font-medium text-slate-800" />
                       <span className="text-xs text-slate-400">{groupSubtitle(grp)}</span>
                     </button>
                   ))}
