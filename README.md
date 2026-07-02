@@ -1,16 +1,54 @@
 # BI Shoper
 
-BI Shoper is an analytics platform for Shoper-based ecommerce stores.
+BI Shoper demonstrates an end-to-end e-commerce analytics workflow:
 
-The project combines:
-- a PostgreSQL-backed data warehouse,
-- a FastAPI analytics backend,
-- a React admin panel embedded inside the Shoper admin via iframe,
-- optional GA4 and tracker-based traffic/cart analytics,
-- and operational tooling such as scheduled sync jobs and bulk price updates.
+- API-based data ingestion from Shoper and GA4
+- PostgreSQL RAW/CORE warehouse-style modeling
+- FastAPI analytics backend exposing business metrics
+- React + TypeScript embedded admin dashboard
+- Operational tools for bulk price updates and sync monitoring
+- Scheduled background jobs and token renewal logic
 
-This repository is both a working product prototype and a portfolio-style engineering project focused on data ingestion, analytics modeling, and dashboard UX.
+The project is designed to show practical BI, analytics engineering, backend integration, and e-commerce reporting skills in one vertical product
 
+## Business Problem
+
+Small and mid-sized Shoper stores often rely on fragmented reports from the store admin, GA4, spreadsheets, and manual exports. This makes it difficult to answer operational questions such as:
+
+- Which products and categories drive revenue?
+- Which customers are returning and which cohorts retain best?
+- How do traffic sources translate into orders?
+- Where does the cart or checkout funnel lose users?
+- How can bulk price changes be validated before being applied?
+
+BI Shoper centralizes these workflows into one analytics and operations panel.
+
+## Data Model & Reliability
+
+## Current Status
+
+This is an actively developed portfolio/product prototype.
+
+Implemented:
+
+- Shoper API sync client with pagination, retry logic, and token renewal
+- PostgreSQL RAW and CORE data layers
+- FastAPI analytics backend
+- React + TypeScript embedded analytics panel
+- GA4 traffic ingestion
+- Tracker/event pipeline groundwork
+- APScheduler-based background jobs
+- CSV bulk price update workflow with validation, progress tracking, logs, and exports
+
+In progress:
+
+- Partner API OAuth installation flow
+- Alembic-based migration workflow
+- Docker Compose local environment
+- Demo dataset for portfolio review
+- CI pipeline for backend and frontend checks
+- Production deployment documentation
+  
 ## Panel Preview
 
 Embedded analytics panel for Shoper store admins — React dashboard inside the Shoper admin iframe:
