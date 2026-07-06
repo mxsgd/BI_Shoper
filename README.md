@@ -23,7 +23,6 @@ Small and mid-sized Shoper stores often rely on fragmented reports from the stor
 
 BI Shoper centralizes these workflows into one analytics and operations panel.
 
-## Data Model & Reliability
 
 ## Current Status
 
