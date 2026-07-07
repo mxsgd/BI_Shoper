@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..services.analytics_core.overview import FocusDateOutOfPeriodError, OverviewService
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -71,126 +72,11 @@ async def overview(
     avg items/order, paid %, with comparison to previous period.
     With focus_date: metrics for that day only (delta vs previous calendar day).
     """
-    cur_start, cur_end, prev_start, prev_end = _period_bounds(period)
-
-    def _delta(cur_val, prev_val):
-        if not prev_val:
-            return None
-        return round((float(cur_val) - float(prev_val)) / float(prev_val) * 100, 1)
-
-    if focus_date is not None:
-        if focus_date < cur_start or focus_date > cur_end:
-            raise HTTPException(status_code=400, detail="focus_date outside selected period")
-        prev_day = focus_date - timedelta(days=1)
-        sql = text("""
-            WITH cur AS (
-                SELECT
-                    COALESCE(SUM(gross_value), 0)   AS revenue,
-                    COUNT(*)                         AS orders,
-                    COUNT(DISTINCT customer_id)      AS customers,
-                    COALESCE(AVG(gross_value), 0)    AS aov,
-                    COALESCE(AVG(items_count), 0)    AS avg_items,
-                    COUNT(*) FILTER (WHERE payment_status = 'paid') AS paid_orders
-                FROM fact_orders
-                WHERE store_id = :store_id
-                  AND order_date::date = :focus_date
-            ),
-            prev AS (
-                SELECT
-                    COALESCE(SUM(gross_value), 0)   AS revenue,
-                    COUNT(*)                         AS orders,
-                    COUNT(DISTINCT customer_id)      AS customers,
-                    COALESCE(AVG(gross_value), 0)    AS aov
-                FROM fact_orders
-                WHERE store_id = :store_id
-                  AND order_date::date = :prev_day
-            )
-            SELECT
-                cur.revenue, cur.orders, cur.customers, cur.aov,
-                cur.avg_items, cur.paid_orders,
-                prev.revenue  AS prev_revenue,
-                prev.orders   AS prev_orders,
-                prev.customers AS prev_customers,
-                prev.aov      AS prev_aov
-            FROM cur, prev
-        """)
-        row = (await db.execute(sql, {
-            "store_id": store_id,
-            "focus_date": focus_date,
-            "prev_day": prev_day,
-        })).one()
-        return {
-            "period_days": period,
-            "focus_date": str(focus_date),
-            "date_from": str(focus_date),
-            "date_to": str(focus_date),
-            "revenue": round(float(row.revenue), 2),
-            "revenue_delta_pct": _delta(row.revenue, row.prev_revenue),
-            "orders": row.orders,
-            "orders_delta_pct": _delta(row.orders, row.prev_orders),
-            "aov": round(float(row.aov), 2),
-            "aov_delta_pct": _delta(row.aov, row.prev_aov),
-            "customers": row.customers,
-            "customers_delta_pct": _delta(row.customers, row.prev_customers),
-            "avg_items_per_order": round(float(row.avg_items), 1),
-            "paid_pct": round(row.paid_orders / row.orders * 100, 1) if row.orders else 0,
-        }
-
-    sql = text("""
-        WITH cur AS (
-            SELECT
-                COALESCE(SUM(gross_value), 0)   AS revenue,
-                COUNT(*)                         AS orders,
-                COUNT(DISTINCT customer_id)      AS customers,
-                COALESCE(AVG(gross_value), 0)    AS aov,
-                COALESCE(AVG(items_count), 0)    AS avg_items,
-                COUNT(*) FILTER (WHERE payment_status = 'paid') AS paid_orders
-            FROM fact_orders
-            WHERE store_id = :store_id
-              AND order_date::date BETWEEN :cur_start AND :cur_end
-        ),
-        prev AS (
-            SELECT
-                COALESCE(SUM(gross_value), 0)   AS revenue,
-                COUNT(*)                         AS orders,
-                COUNT(DISTINCT customer_id)      AS customers,
-                COALESCE(AVG(gross_value), 0)    AS aov
-            FROM fact_orders
-            WHERE store_id = :store_id
-              AND order_date::date BETWEEN :prev_start AND :prev_end
-        )
-        SELECT
-            cur.revenue, cur.orders, cur.customers, cur.aov,
-            cur.avg_items, cur.paid_orders,
-            prev.revenue  AS prev_revenue,
-            prev.orders   AS prev_orders,
-            prev.customers AS prev_customers,
-            prev.aov      AS prev_aov
-        FROM cur, prev
-    """)
-
-    row = (await db.execute(sql, {
-        "store_id": store_id,
-        "cur_start": cur_start, "cur_end": cur_end,
-        "prev_start": prev_start, "prev_end": prev_end,
-    })).one()
-
-    return {
-        "period_days": period,
-        "focus_date": None,
-        "date_from": str(cur_start),
-        "date_to": str(cur_end),
-        "revenue": round(float(row.revenue), 2),
-        "revenue_delta_pct": _delta(row.revenue, row.prev_revenue),
-        "orders": row.orders,
-        "orders_delta_pct": _delta(row.orders, row.prev_orders),
-        "aov": round(float(row.aov), 2),
-        "aov_delta_pct": _delta(row.aov, row.prev_aov),
-        "customers": row.customers,
-        "customers_delta_pct": _delta(row.customers, row.prev_customers),
-        "avg_items_per_order": round(float(row.avg_items), 1),
-        "paid_pct": round(row.paid_orders / row.orders * 100, 1) if row.orders else 0,
-    }
+    svc = OverviewService(db)
+    try:
+        return await svc.get_overview(store_id, period, focus_date)
+    except FocusDateOutOfPeriodError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ──────────────────────────────────────────────────────────────────

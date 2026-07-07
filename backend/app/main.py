@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="BI Shoper",
-    description="Analiza biznesowa sklepow Shoper",
+    description="Business Intelligence for Shoper",
     version="0.1.0",
     lifespan=lifespan,
 )

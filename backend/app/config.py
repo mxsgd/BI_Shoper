@@ -10,9 +10,7 @@ class Settings(BaseSettings):
     ga4_credentials_path: str = ""
     ga4_sync_window_days: int = 90
 
-    # Opcjonalny URL Postgresa z Railway (tabela `events` trackera) — sync → tracker_events_local przy starcie
     tracker_remote_database_url: str = ""
-    # Dev na Windows: Railway proxy często ma self-signed chain — wyłącza SSL dla synca (tylko lokalnie)
     tracker_remote_ssl_insecure: bool = False
 
     @property
