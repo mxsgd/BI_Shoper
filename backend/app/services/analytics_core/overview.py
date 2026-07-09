@@ -3,11 +3,7 @@ from datetime import date, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .common import delta_pct, period_bounds
-
-
-class FocusDateOutOfPeriodError(ValueError):
-    pass
+from .common import FocusDateOutOfPeriodError, delta_pct, period_bounds
 
 
 class OverviewService:
@@ -46,7 +42,7 @@ class OverviewService:
                     COUNT(*) FILTER (WHERE payment_status = 'paid') AS paid_orders
                 FROM fact_orders
                 WHERE store_id = :store_id
-                  AND order_date::date = :focus_date
+                    AND order_date::date = :focus_date
             ),
             prev AS (
                 SELECT
@@ -56,7 +52,7 @@ class OverviewService:
                     COALESCE(AVG(gross_value), 0)    AS aov
                 FROM fact_orders
                 WHERE store_id = :store_id
-                  AND order_date::date = :prev_day
+                    AND order_date::date = :prev_day
             )
             SELECT
                 cur.revenue, cur.orders, cur.customers, cur.aov,
@@ -100,7 +96,7 @@ class OverviewService:
                     COUNT(*) FILTER (WHERE payment_status = 'paid') AS paid_orders
                 FROM fact_orders
                 WHERE store_id = :store_id
-                  AND order_date::date BETWEEN :cur_start AND :cur_end
+                    AND order_date::date BETWEEN :cur_start AND :cur_end
             ),
             prev AS (
                 SELECT
@@ -110,7 +106,7 @@ class OverviewService:
                     COALESCE(AVG(gross_value), 0)    AS aov
                 FROM fact_orders
                 WHERE store_id = :store_id
-                  AND order_date::date BETWEEN :prev_start AND :prev_end
+                    AND order_date::date BETWEEN :prev_start AND :prev_end
             )
             SELECT
                 cur.revenue, cur.orders, cur.customers, cur.aov,

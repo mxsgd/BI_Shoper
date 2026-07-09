@@ -3,7 +3,7 @@ Analytics API — CORE star-schema endpoints.
 
 All queries hit the CORE layer (fact_orders, fact_order_items, dim_*).
 Query params: store_id (required), period (days, default 30),
-              compare (bool — include previous period for comparison).
+            compare (bool — include previous period for comparison).
 """
 
 from collections import defaultdict
@@ -15,46 +15,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..services.analytics_core.overview import FocusDateOutOfPeriodError, OverviewService
+from ..services.analytics_core.common import (
+    FocusDateOutOfPeriodError,
+    date_bucket_series_sql as _date_bucket_series_sql,
+)
+from ..services.analytics_core.cohorts import CohortsService
+from ..services.analytics_core.customers_analytics import CustomersAnalyticsService
+from ..services.analytics_core.overview import OverviewService
+from ..services.analytics_core.revenue import RevenueService
+from ..services.analytics_core.top_products import TopProductsService
+from ..services.analytics_core.trends import TrendsService
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
-
-
-def _date_bucket_series_sql(group_by: Literal["day", "week", "month"]) -> str:
-    """SQL fragment: FROM ... AS b(bucket) producing one row per bucket in the period.
-
-    Use CAST(:x AS type), not :x::type — SQLAlchemy treats ':' as bind syntax and breaks on '::'.
-    """
-    if group_by == "day":
-        return (
-            "generate_series(CAST(:since AS date), CAST(:today AS date), interval '1 day') "
-            "AS b(bucket)"
-        )
-    if group_by == "week":
-        return (
-            "generate_series("
-            "date_trunc('week', CAST(:since AS timestamp))::date, "
-            "date_trunc('week', CAST(:today AS timestamp))::date, "
-            "interval '1 week'"
-            ") AS b(bucket)"
-        )
-    return (
-        "generate_series("
-        "date_trunc('month', CAST(:since AS date))::date, "
-        "date_trunc('month', CAST(:today AS date))::date, "
-        "interval '1 month'"
-        ") AS b(bucket)"
-    )
-
-
-def _period_bounds(period_days: int) -> tuple[date, date, date, date]:
-    """Return (cur_start, cur_end, prev_start, prev_end) for current + previous period."""
-    today = date.today()
-    cur_end = today
-    cur_start = today - timedelta(days=period_days - 1)
-    prev_end = cur_start - timedelta(days=1)
-    prev_start = prev_end - timedelta(days=period_days - 1)
-    return cur_start, cur_end, prev_start, prev_end
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -94,150 +66,11 @@ async def revenue(
     Revenue time series + breakdown by status and channel.
     With focus_date: status/channel tables are for that day only (time_series unchanged).
     """
-    cur_start = date.today() - timedelta(days=period - 1)
-    today = date.today()
-    if focus_date is not None and (focus_date < cur_start or focus_date > today):
-        raise HTTPException(status_code=400, detail="focus_date outside selected period")
-
-    trunc_map = {"day": "day", "week": "week", "month": "month"}
-    trunc = trunc_map[group_by]
-    bucket_from = _date_bucket_series_sql(group_by)
-
-    # Time series — full calendar buckets (zeros where no orders)
-    ts_sql = text(f"""
-        SELECT
-            b.bucket::date AS bucket,
-            COALESCE(agg.orders, 0)              AS orders,
-            COALESCE(agg.revenue, 0)             AS revenue,
-            COALESCE(agg.discounts, 0)           AS discounts,
-            COALESCE(agg.shipping, 0)            AS shipping
-        FROM {bucket_from}
-        LEFT JOIN (
-            SELECT
-                date_trunc(:trunc, order_date)::date AS bucket,
-                COUNT(*)                              AS orders,
-                COALESCE(SUM(gross_value), 0)         AS revenue,
-                COALESCE(SUM(discount_value), 0)      AS discounts,
-                COALESCE(SUM(shipping_value), 0)      AS shipping
-            FROM fact_orders
-            WHERE store_id = :store_id
-              AND order_date::date >= :since
-            GROUP BY bucket
-        ) agg ON agg.bucket = b.bucket::date
-        ORDER BY b.bucket
-    """)
-    ts_rows = (await db.execute(ts_sql, {
-        "store_id": store_id, "since": cur_start, "today": today, "trunc": trunc,
-    })).all()
-
-    # By status / channel — whole period, or single day when focus_date set
-    if focus_date is not None:
-        status_sql = text("""
-            SELECT order_status, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-            FROM fact_orders
-            WHERE store_id = :store_id AND order_date::date = :focus_date
-            GROUP BY order_status
-            ORDER BY revenue DESC
-        """)
-        status_rows = (await db.execute(status_sql, {
-            "store_id": store_id, "focus_date": focus_date,
-        })).all()
-        channel_sql = text("""
-            SELECT source_channel, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-            FROM fact_orders
-            WHERE store_id = :store_id AND order_date::date = :focus_date
-            GROUP BY source_channel
-            ORDER BY revenue DESC
-        """)
-        channel_rows = (await db.execute(channel_sql, {
-            "store_id": store_id, "focus_date": focus_date,
-        })).all()
-        category_sql = text("""
-            SELECT
-                COALESCE(dc.category_name, 'Bez kategorii') AS category,
-                COUNT(DISTINCT foi.order_id) AS orders,
-                COALESCE(SUM(foi.total_gross), 0) AS revenue,
-                COALESCE(SUM(foi.quantity), 0) AS quantity
-            FROM fact_order_items foi
-            JOIN fact_orders fo ON fo.order_id = foi.order_id
-            LEFT JOIN dim_categories dc ON dc.category_id = foi.category_id
-            WHERE fo.store_id = :store_id AND fo.order_date::date = :focus_date
-            GROUP BY COALESCE(dc.category_name, 'Bez kategorii')
-            ORDER BY revenue DESC
-        """)
-        category_rows = (await db.execute(category_sql, {
-            "store_id": store_id, "focus_date": focus_date,
-        })).all()
-    else:
-        status_sql = text("""
-            SELECT order_status, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-            FROM fact_orders
-            WHERE store_id = :store_id AND order_date::date >= :since
-            GROUP BY order_status
-            ORDER BY revenue DESC
-        """)
-        status_rows = (await db.execute(status_sql, {
-            "store_id": store_id, "since": cur_start,
-        })).all()
-        channel_sql = text("""
-            SELECT source_channel, COUNT(*) AS orders, COALESCE(SUM(gross_value), 0) AS revenue
-            FROM fact_orders
-            WHERE store_id = :store_id AND order_date::date >= :since
-            GROUP BY source_channel
-            ORDER BY revenue DESC
-        """)
-        channel_rows = (await db.execute(channel_sql, {
-            "store_id": store_id, "since": cur_start,
-        })).all()
-        category_sql = text("""
-            SELECT
-                COALESCE(dc.category_name, 'Bez kategorii') AS category,
-                COUNT(DISTINCT foi.order_id) AS orders,
-                COALESCE(SUM(foi.total_gross), 0) AS revenue,
-                COALESCE(SUM(foi.quantity), 0) AS quantity
-            FROM fact_order_items foi
-            JOIN fact_orders fo ON fo.order_id = foi.order_id
-            LEFT JOIN dim_categories dc ON dc.category_id = foi.category_id
-            WHERE fo.store_id = :store_id AND fo.order_date::date >= :since
-            GROUP BY COALESCE(dc.category_name, 'Bez kategorii')
-            ORDER BY revenue DESC
-        """)
-        category_rows = (await db.execute(category_sql, {
-            "store_id": store_id, "since": cur_start,
-        })).all()
-
-    return {
-        "period_days": period,
-        "group_by": group_by,
-        "focus_date": str(focus_date) if focus_date else None,
-        "time_series": [
-            {
-                "date": str(r.bucket),
-                "orders": r.orders,
-                "revenue": round(float(r.revenue), 2),
-                "discounts": round(float(r.discounts), 2),
-                "shipping": round(float(r.shipping), 2),
-            }
-            for r in ts_rows
-        ],
-        "by_status": [
-            {"status": r.order_status, "orders": r.orders, "revenue": round(float(r.revenue), 2)}
-            for r in status_rows
-        ],
-        "by_channel": [
-            {"channel": r.source_channel, "orders": r.orders, "revenue": round(float(r.revenue), 2)}
-            for r in channel_rows
-        ],
-        "by_category": [
-            {
-                "category": r.category,
-                "orders": r.orders,
-                "revenue": round(float(r.revenue), 2),
-                "quantity": int(r.quantity),
-            }
-            for r in category_rows
-        ],
-    }
+    svc = RevenueService(db)
+    try:
+        return await svc.get_revenue(store_id, period, group_by, focus_date)
+    except FocusDateOutOfPeriodError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -254,68 +87,8 @@ async def top_products(
     """
     Top products by revenue or quantity, with Pareto cumulative %.
     """
-    since = date.today() - timedelta(days=period - 1)
-    order_col = "revenue" if sort_by == "revenue" else "total_qty"
-
-    sql = text(f"""
-        WITH ranked AS (
-            SELECT
-                foi.product_id,
-                dp.product_name,
-                dc.category_name,
-                SUM(foi.quantity)    AS total_qty,
-                SUM(foi.total_gross) AS revenue,
-                COUNT(DISTINCT foi.order_id) AS order_count
-            FROM fact_order_items foi
-            JOIN fact_orders fo
-                ON fo.order_id = foi.order_id
-            LEFT JOIN dim_products dp
-                ON dp.product_id = foi.product_id
-            LEFT JOIN dim_categories dc
-                ON dc.category_id = foi.category_id
-            WHERE fo.store_id = :store_id
-              AND fo.order_date::date >= :since
-            GROUP BY foi.product_id, dp.product_name, dc.category_name
-        ),
-        totals AS (
-            SELECT SUM(revenue) AS grand_total FROM ranked
-        )
-        SELECT
-            r.product_id,
-            r.product_name,
-            r.category_name,
-            r.total_qty,
-            r.revenue,
-            r.order_count,
-            ROUND(r.revenue / NULLIF(t.grand_total, 0) * 100, 2) AS revenue_pct,
-            SUM(r.revenue) OVER (ORDER BY r.{order_col} DESC)
-                / NULLIF(t.grand_total, 0) * 100 AS cumulative_pct
-        FROM ranked r, totals t
-        ORDER BY r.{order_col} DESC
-        LIMIT :lim
-    """)
-
-    rows = (await db.execute(sql, {
-        "store_id": store_id, "since": since, "lim": limit,
-    })).all()
-
-    return {
-        "period_days": period,
-        "sort_by": sort_by,
-        "products": [
-            {
-                "product_id": r.product_id,
-                "name": r.product_name or f"Product #{r.product_id}",
-                "category": r.category_name,
-                "quantity": int(r.total_qty),
-                "revenue": round(float(r.revenue), 2),
-                "orders": r.order_count,
-                "revenue_pct": float(r.revenue_pct or 0),
-                "cumulative_pct": round(float(r.cumulative_pct or 0), 2),
-            }
-            for r in rows
-        ],
-    }
+    svc = TopProductsService(db)
+    return await svc.get_top_products(store_id, period, limit, sort_by)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -330,112 +103,8 @@ async def customers_analytics(
     """
     Customer analytics: new vs returning, top by revenue, cohort overview.
     """
-    since = date.today() - timedelta(days=period - 1)
-    today = date.today()
-
-    # Segmentation
-    seg_sql = text("""
-        SELECT
-            customer_type,
-            COUNT(*)                           AS count,
-            COALESCE(SUM(total_revenue), 0)    AS revenue,
-            COALESCE(AVG(total_orders), 0)     AS avg_orders,
-            COALESCE(AVG(total_revenue), 0)    AS avg_revenue
-        FROM dim_customers
-        WHERE store_id = :store_id
-        GROUP BY customer_type
-    """)
-    seg_rows = (await db.execute(seg_sql, {"store_id": store_id})).all()
-
-    # Top customers by revenue
-    top_sql = text("""
-        SELECT
-            dc.customer_id,
-            dc.total_orders,
-            dc.total_revenue,
-            dc.first_order_date,
-            dc.last_order_date,
-            dc.customer_type
-        FROM dim_customers dc
-        WHERE dc.store_id = :store_id AND dc.total_revenue > 0
-        ORDER BY dc.total_revenue DESC
-        LIMIT 20
-    """)
-    top_rows = (await db.execute(top_sql, {"store_id": store_id})).all()
-
-    # New customers per month — full month range (zeros where none)
-    new_sql = text("""
-        SELECT
-            d.month::date AS month,
-            COALESCE(agg.new_customers, 0) AS new_customers
-        FROM generate_series(
-            date_trunc('month', CAST(:since AS date))::date,
-            date_trunc('month', CAST(:today AS date))::date,
-            interval '1 month'
-        ) AS d(month)
-        LEFT JOIN (
-            SELECT
-                date_trunc('month', first_order_date)::date AS month,
-                COUNT(*) AS new_customers
-            FROM dim_customers
-            WHERE store_id = :store_id
-              AND first_order_date IS NOT NULL
-              AND first_order_date::date >= :since
-            GROUP BY month
-        ) agg ON agg.month = d.month::date
-        ORDER BY d.month
-    """)
-    new_rows = (await db.execute(new_sql, {
-        "store_id": store_id, "since": since, "today": today,
-    })).all()
-
-    # Repeat rate
-    repeat_sql = text("""
-        SELECT
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE total_orders > 1) AS repeat_buyers,
-            COUNT(*) FILTER (WHERE total_orders = 1) AS one_time
-        FROM dim_customers
-        WHERE store_id = :store_id AND total_orders > 0
-    """)
-    repeat_row = (await db.execute(repeat_sql, {"store_id": store_id})).one()
-
-    return {
-        "period_days": period,
-        "segmentation": [
-            {
-                "type": r.customer_type,
-                "count": r.count,
-                "revenue": round(float(r.revenue), 2),
-                "avg_orders": round(float(r.avg_orders), 1),
-                "avg_revenue": round(float(r.avg_revenue), 2),
-            }
-            for r in seg_rows
-        ],
-        "top_customers": [
-            {
-                "customer_id": r.customer_id,
-                "total_orders": r.total_orders,
-                "total_revenue": round(float(r.total_revenue), 2),
-                "first_order": str(r.first_order_date.date()) if r.first_order_date else None,
-                "last_order": str(r.last_order_date.date()) if r.last_order_date else None,
-                "type": r.customer_type,
-            }
-            for r in top_rows
-        ],
-        "new_customers_monthly": [
-            {"month": str(r.month), "count": r.new_customers}
-            for r in new_rows
-        ],
-        "retention": {
-            "total_buyers": repeat_row.total,
-            "repeat_buyers": repeat_row.repeat_buyers,
-            "one_time_buyers": repeat_row.one_time,
-            "repeat_rate_pct": round(
-                repeat_row.repeat_buyers / repeat_row.total * 100, 1
-            ) if repeat_row.total else 0,
-        },
-    }
+    svc = CustomersAnalyticsService(db)
+    return await svc.get_customers_analytics(store_id, period)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -450,112 +119,8 @@ async def trends(
     """
     Sales trends: daily with MA7/MA30, monthly MoM/YoY, weekday patterns.
     """
-    since = date.today() - timedelta(days=period - 1)
-
-    daily_sql = text("""
-        SELECT
-            d.date                       AS dt,
-            COALESCE(agg.revenue, 0)     AS revenue,
-            COALESCE(agg.orders, 0)      AS orders,
-            AVG(COALESCE(agg.revenue, 0)) OVER (
-                ORDER BY d.date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-            ) AS ma7,
-            AVG(COALESCE(agg.revenue, 0)) OVER (
-                ORDER BY d.date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
-            ) AS ma30
-        FROM generate_series(CAST(:since AS date), CAST(:today AS date), interval '1 day') AS d(date)
-        LEFT JOIN (
-            SELECT order_date::date AS odate,
-                   SUM(gross_value) AS revenue,
-                   COUNT(*)         AS orders
-            FROM fact_orders
-            WHERE store_id = :store_id AND order_date::date >= :since
-            GROUP BY order_date::date
-        ) agg ON agg.odate = d.date
-        ORDER BY d.date
-    """)
-    daily_rows = (await db.execute(daily_sql, {
-        "store_id": store_id, "since": since, "today": date.today(),
-    })).all()
-
-    monthly_sql = text("""
-        WITH monthly AS (
-            SELECT
-                date_trunc('month', order_date)::date AS month,
-                SUM(gross_value)  AS revenue,
-                COUNT(*)          AS orders
-            FROM fact_orders
-            WHERE store_id = :store_id
-            GROUP BY month
-            ORDER BY month
-        )
-        SELECT
-            month,
-            revenue,
-            orders,
-            ROUND(
-                (revenue - LAG(revenue) OVER (ORDER BY month))
-                / NULLIF(LAG(revenue) OVER (ORDER BY month), 0) * 100, 1
-            ) AS mom_growth_pct,
-            ROUND(
-                (revenue - LAG(revenue, 12) OVER (ORDER BY month))
-                / NULLIF(LAG(revenue, 12) OVER (ORDER BY month), 0) * 100, 1
-            ) AS yoy_growth_pct
-        FROM monthly
-    """)
-    monthly_rows = (await db.execute(monthly_sql, {"store_id": store_id})).all()
-
-    weekday_sql = text("""
-        SELECT
-            EXTRACT(ISODOW FROM d)::int AS day_of_week,
-            ROUND(AVG(daily_rev)::numeric, 2)    AS avg_revenue,
-            ROUND(AVG(daily_ord)::numeric, 1)    AS avg_orders
-        FROM (
-            SELECT order_date::date AS d,
-                   SUM(gross_value) AS daily_rev,
-                   COUNT(*)         AS daily_ord
-            FROM fact_orders
-            WHERE store_id = :store_id AND order_date::date >= :since
-            GROUP BY order_date::date
-        ) sub
-        GROUP BY EXTRACT(ISODOW FROM d)
-        ORDER BY day_of_week
-    """)
-    weekday_rows = (await db.execute(weekday_sql, {
-        "store_id": store_id, "since": since,
-    })).all()
-
-    return {
-        "period_days": period,
-        "daily": [
-            {
-                "date": str(r.dt),
-                "revenue": round(float(r.revenue), 2),
-                "orders": int(r.orders),
-                "ma7": round(float(r.ma7), 2) if r.ma7 else 0,
-                "ma30": round(float(r.ma30), 2) if r.ma30 else 0,
-            }
-            for r in daily_rows
-        ],
-        "monthly": [
-            {
-                "month": str(r.month),
-                "revenue": round(float(r.revenue), 2),
-                "orders": r.orders,
-                "mom_growth_pct": float(r.mom_growth_pct) if r.mom_growth_pct is not None else None,
-                "yoy_growth_pct": float(r.yoy_growth_pct) if r.yoy_growth_pct is not None else None,
-            }
-            for r in monthly_rows
-        ],
-        "weekday_pattern": [
-            {
-                "day_of_week": r.day_of_week,
-                "avg_revenue": float(r.avg_revenue),
-                "avg_orders": float(r.avg_orders),
-            }
-            for r in weekday_rows
-        ],
-    }
+    svc = TrendsService(db)
+    return await svc.get_trends(store_id, period)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -570,58 +135,8 @@ async def cohorts(
     """
     Monthly acquisition cohort retention matrix.
     """
-    since = date.today() - timedelta(days=months * 31)
-
-    sql = text("""
-        WITH cohorts AS (
-            SELECT customer_id,
-                   date_trunc('month', first_order_date)::date AS cohort_month
-            FROM dim_customers
-            WHERE store_id = :store_id
-              AND first_order_date IS NOT NULL
-              AND first_order_date::date >= :since
-        ),
-        cohort_sizes AS (
-            SELECT cohort_month, COUNT(*) AS size
-            FROM cohorts GROUP BY cohort_month
-        ),
-        activity AS (
-            SELECT DISTINCT fo.customer_id,
-                   date_trunc('month', fo.order_date)::date AS activity_month
-            FROM fact_orders fo
-            WHERE fo.store_id = :store_id AND fo.customer_id IS NOT NULL
-        ),
-        matrix AS (
-            SELECT
-                c.cohort_month,
-                (EXTRACT(YEAR FROM a.activity_month) - EXTRACT(YEAR FROM c.cohort_month)) * 12
-                + EXTRACT(MONTH FROM a.activity_month) - EXTRACT(MONTH FROM c.cohort_month)
-                AS month_offset,
-                COUNT(DISTINCT a.customer_id) AS active
-            FROM cohorts c
-            JOIN activity a ON a.customer_id = c.customer_id
-                           AND a.activity_month >= c.cohort_month
-            GROUP BY c.cohort_month, month_offset
-        )
-        SELECT m.cohort_month, cs.size, m.month_offset, m.active
-        FROM matrix m
-        JOIN cohort_sizes cs ON cs.cohort_month = m.cohort_month
-        ORDER BY m.cohort_month, m.month_offset
-    """)
-    rows = (await db.execute(sql, {"store_id": store_id, "since": since})).all()
-
-    cohort_map: dict[str, dict] = {}
-    for r in rows:
-        key = str(r.cohort_month)
-        if key not in cohort_map:
-            cohort_map[key] = {"cohort_month": key, "size": r.size, "months": []}
-        cohort_map[key]["months"].append({
-            "month_offset": int(r.month_offset),
-            "active": r.active,
-            "retention_pct": round(r.active / r.size * 100, 1) if r.size else 0,
-        })
-
-    return {"cohorts": list(cohort_map.values())}
+    svc = CohortsService(db)
+    return await svc.get_cohorts(store_id, months)
 
 
 # ──────────────────────────────────────────────────────────────────
