@@ -6,7 +6,6 @@ Query params: store_id (required), period (days, default 30),
             compare (bool — include previous period for comparison).
 """
 
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 
@@ -25,6 +24,7 @@ from ..services.analytics_core.overview import OverviewService
 from ..services.analytics_core.revenue import RevenueService
 from ..services.analytics_core.top_products import TopProductsService
 from ..services.analytics_core.trends import TrendsService
+from ..services.analytics_core.rfm import RfmService
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -142,16 +142,6 @@ async def cohorts(
 # ──────────────────────────────────────────────────────────────────
 # GET /analytics/rfm
 # ──────────────────────────────────────────────────────────────────
-RFM_SEGMENTS = {
-    "Mistrzowie":     lambda r, f, _m: r >= 4 and f >= 4,
-    "Lojalni":        lambda r, f, _m: r >= 3 and f >= 3 and not (r >= 4 and f >= 4),
-    "Nowi klienci":   lambda r, f, _m: r >= 4 and f <= 2,
-    "Zagrożeni":      lambda r, f, _m: r <= 2 and f >= 3,
-    "Utraceni":       lambda r, f, _m: r <= 2 and f <= 2,
-    "Inni":           lambda _r, _f, _m: True,
-}
-
-
 @router.get("/rfm")
 async def rfm_analysis(
     store_id: int = Query(...),
@@ -160,60 +150,8 @@ async def rfm_analysis(
     """
     RFM scoring with segment breakdown and CLV summary.
     """
-    sql = text("""
-        WITH rfm AS (
-            SELECT
-                customer_id,
-                EXTRACT(DAY FROM NOW() - last_order_date)::int AS recency_days,
-                total_orders   AS frequency,
-                total_revenue  AS monetary,
-                NTILE(5) OVER (ORDER BY last_order_date ASC)  AS r,
-                NTILE(5) OVER (ORDER BY total_orders)         AS f,
-                NTILE(5) OVER (ORDER BY total_revenue)        AS m
-            FROM dim_customers
-            WHERE store_id = :store_id AND total_orders > 0
-        )
-        SELECT customer_id, recency_days, frequency, monetary, r, f, m
-        FROM rfm
-    """)
-    rows = (await db.execute(sql, {"store_id": store_id})).all()
-
-    if not rows:
-        return {"segments": [], "distribution": {}, "summary": {}}
-
-    segments: dict[str, list] = defaultdict(list)
-    for row in rows:
-        for name, test in RFM_SEGMENTS.items():
-            if test(row.r, row.f, row.m):
-                segments[name].append(row)
-                break
-
-    segment_list = []
-    for name, members in segments.items():
-        if not members:
-            continue
-        segment_list.append({
-            "name": name,
-            "count": len(members),
-            "avg_revenue": round(sum(float(m.monetary) for m in members) / len(members), 2),
-            "avg_orders": round(sum(m.frequency for m in members) / len(members), 1),
-            "avg_recency_days": round(sum(m.recency_days for m in members) / len(members)),
-        })
-
-    dist: dict[str, int] = defaultdict(int)
-    for row in rows:
-        dist[f"{row.r}{row.f}{row.m}"] += 1
-
-    total_rev = sum(float(r.monetary) for r in rows)
-    return {
-        "segments": segment_list,
-        "distribution": dict(dist),
-        "summary": {
-            "total_customers": len(rows),
-            "avg_clv": round(total_rev / len(rows), 2),
-            "total_revenue": round(total_rev, 2),
-        },
-    }
+    svc = RfmService(db)
+    return await svc.get_rfm(store_id)
 
 
 # ──────────────────────────────────────────────────────────────────
