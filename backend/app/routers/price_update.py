@@ -307,6 +307,14 @@ async def get_price_update_job(job_id: str):
     return _job_response(job)
 
 
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_price_update_job(job_id: str):
+    job = await price_update_jobs.cancel_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"job_id": job.job_id, "status": job.status, "cancel_requested": job.cancel_requested}
+
+
 @router.get("/jobs/{job_id}/logs")
 async def get_price_update_logs(
     job_id: str,
