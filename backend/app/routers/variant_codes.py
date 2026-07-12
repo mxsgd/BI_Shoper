@@ -305,6 +305,136 @@ async def get_product_stocks(
 
 # ─── detect option groups for a product ──────────────────────────────────────
 
+async def _fetch_option_value_pool(client: ShoperClient, gid: str) -> dict[str, str]:
+    """Fetch ALL values defined in Shoper for one option group. Returns {value_id: value_name}."""
+    try:
+        # Shoper filters option-values by "option_id" (the group id), and each
+        # item's own id is "ovalue_id" — not "option_group_id" / "id".
+        raw_items: list[dict] = await client.get_filtered(
+            "/option-values", {"option_id": int(gid)}
+        )
+    except Exception:
+        raw_items = []
+
+    pool: dict[str, str] = {}
+    for item in raw_items:
+        vid = str(item.get("ovalue_id") or "")
+        if not vid:
+            continue
+        n = (item.get("translations") or {}).get("pl_PL", {})
+        name = (n.get("value") or "").strip()
+        pool[vid] = name or f"value_{vid}"
+    return pool
+
+
+def _build_value_entries(vids: set[str], pool: dict[str, str]) -> list[dict]:
+    values = []
+    for vid in sorted(vids, key=lambda v: pool.get(v, v).lower()):
+        name = pool.get(vid) or f"value_{vid}"
+        values.append({
+            "value_id": vid,
+            "value_name": name,
+            "suggested_suffix": _auto_suffix(name),
+        })
+    return values
+
+
+def _determine_role(values: list[dict]) -> str:
+    if not values:
+        return "fabric"
+    size_count = sum(1 for v in values if _is_size(v["value_name"]))
+    return "size" if size_count > len(values) / 2 else "fabric"
+
+
+@router.get("/detect-options-multi")
+async def detect_options_multi(
+    product_ids: str = Query(..., description="Comma-separated product IDs"),
+    store_id: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Detect option groups for multiple products.
+    - Groups: intersection of groups present in ALL products (via existing stocks).
+    - Values: intersection of value_ids actually used across ALL products' stocks
+      (only values every product already has).
+    - available_values: the full pool of values defined in Shoper for that group,
+      for manually adding values not (yet) present in every product.
+    """
+    pids = [int(x) for x in product_ids.split(",") if x.strip().isdigit()]
+    if not pids:
+        raise HTTPException(400, "Brak product_ids")
+
+    store = (
+        await db.execute(select(Store).where(Store.id == store_id, Store.is_active.is_(True)))
+    ).scalar_one_or_none()
+    if store is None:
+        raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
+
+    try:
+        token = await ensure_store_token(db, store)
+    except Exception as exc:
+        raise HTTPException(503, f"Błąd autoryzacji: {exc}") from exc
+
+    client = ShoperClient(store.api_url, token)
+    per_product: list[dict[str, set[str]]] = []
+    total_stocks = 0
+
+    try:
+        for pid in pids:
+            try:
+                stocks: list[dict] = await client.get_filtered("/product-stocks", {"product_id": pid})
+            except Exception:
+                stocks = []
+            total_stocks += len(stocks)
+            group_vids: dict[str, set[str]] = {}
+            for s in stocks:
+                opts = s.get("options") or {}
+                if isinstance(opts, dict):
+                    for gid, vid in opts.items():
+                        group_vids.setdefault(str(gid), set()).add(str(vid))
+            if group_vids:
+                per_product.append(group_vids)
+            await asyncio.sleep(0.1)
+
+        if not per_product:
+            return {"groups": [], "total_stocks": total_stocks}
+
+        # Intersection of group IDs across all products
+        common_gids = set(per_product[0].keys())
+        for gvids in per_product[1:]:
+            common_gids &= set(gvids.keys())
+
+        if not common_gids:
+            return {"groups": [], "total_stocks": total_stocks}
+
+        result: list[dict] = []
+        for gid in sorted(common_gids, key=int):
+            # Intersection of value_ids actually used, across all products, for this group
+            common_vids = set(per_product[0].get(gid, set()))
+            for gvids in per_product[1:]:
+                common_vids &= gvids.get(gid, set())
+
+            pool = await _fetch_option_value_pool(client, gid)
+            # Names for the intersection may include values not in the pool (edge case) —
+            # fall back to the id itself so nothing silently disappears.
+            values = _build_value_entries(common_vids, pool)
+            available_values = _build_value_entries(set(pool.keys()), pool)
+
+            role = _determine_role(values or available_values)
+            result.append({
+                "group_id": gid,
+                "role": role,
+                "values": values,
+                "available_values": available_values,
+            })
+            await asyncio.sleep(0.05)
+
+    finally:
+        await client.close()
+
+    return {"groups": result, "total_stocks": total_stocks}
+
+
 @router.get("/detect-options")
 async def detect_options(
     product_id: int = Query(...),
@@ -329,52 +459,33 @@ async def detect_options(
     client = ShoperClient(store.api_url, token)
     try:
         stocks: list[dict] = await client.get_filtered("/product-stocks", {"product_id": product_id})
-    finally:
-        await client.close()
 
-    # Collect unique group_id → set of value_ids
-    group_vids: dict[str, set[str]] = {}
-    for s in stocks:
-        opts = s.get("options") or {}
-        if isinstance(opts, dict):
-            for gid, vid in opts.items():
-                group_vids.setdefault(str(gid), set()).add(str(vid))
+        # Collect unique group_id → set of value_ids
+        group_vids: dict[str, set[str]] = {}
+        for s in stocks:
+            opts = s.get("options") or {}
+            if isinstance(opts, dict):
+                for gid, vid in opts.items():
+                    group_vids.setdefault(str(gid), set()).add(str(vid))
 
-    if not group_vids:
-        return {"groups": [], "total_stocks": len(stocks)}
+        if not group_vids:
+            return {"groups": [], "total_stocks": len(stocks)}
 
-    # Resolve value names via /option-values/{id}
-    all_vids = sorted({v for vs in group_vids.values() for v in vs}, key=int)
-    val_names: dict[str, str] = {}
-    client2 = ShoperClient(store.api_url, token)
-    try:
-        for vid in all_vids:
-            try:
-                d = await client2.get(f"/option-values/{vid}")
-                if d:
-                    n = (d.get("translations") or {}).get("pl_PL", {})
-                    val_names[vid] = (n.get("value") or n.get("name") or "").strip()
-            except Exception:
-                pass
+        result: list[dict] = []
+        for gid in sorted(group_vids.keys(), key=int):
+            pool = await _fetch_option_value_pool(client, gid)
+            values = _build_value_entries(group_vids[gid], pool)
+            available_values = _build_value_entries(set(pool.keys()), pool)
+            role = _determine_role(values or available_values)
+            result.append({
+                "group_id": gid,
+                "role": role,
+                "values": values,
+                "available_values": available_values,
+            })
             await asyncio.sleep(0.05)
     finally:
-        await client2.close()
-
-    # Build result groups
-    result: list[dict] = []
-    for gid in sorted(group_vids.keys(), key=int):
-        vids = group_vids[gid]
-        values = []
-        for vid in sorted(vids, key=lambda v: val_names.get(v, v).lower()):
-            name = val_names.get(vid) or f"value_{vid}"
-            values.append({
-                "value_id": vid,
-                "value_name": name,
-                "suggested_suffix": _auto_suffix(name),
-            })
-        size_count = sum(1 for v in values if _is_size(v["value_name"]))
-        role = "size" if size_count > len(values) / 2 else "fabric"
-        result.append({"group_id": gid, "role": role, "values": values})
+        await client.close()
 
     return {"groups": result, "total_stocks": len(stocks)}
 
@@ -398,6 +509,7 @@ class ApplyCodesRequest(BaseModel):
     option_groups: list[OptionGroupConfig]  # ordered: suffix order in code
     prices: dict[str, float] = {}           # variant_code -> price (from CSV)
     create_missing: bool = True             # POST if stock doesn't exist yet
+    supplement_mode: bool = False           # fix ALL existing stocks (incl. extra-group ones)
 
 
 @router.post("/apply-codes/start")
@@ -451,19 +563,10 @@ async def _run_apply_job(
     token: str,
 ) -> None:
     job = _apply_jobs[job_id]
-
-    # Build suffix lookup: value_id -> suffix
-    suffix_map: dict[str, str] = {}
-    for og in body.option_groups:
-        for v in og.values:
-            suffix_map[v.value_id] = v.suffix
-
-    # Prices lookup: upper(code) -> price
     prices_upper: dict[str, float] = {k.upper(): v for k, v in body.prices.items()}
 
     client = ShoperClient(api_url, token)
     try:
-        # Fetch product codes from DB  (needed to build variant codes)
         async with async_session() as db:
             prods = (
                 await db.execute(
@@ -473,95 +576,10 @@ async def _run_apply_job(
             ).all()
         prod_code_map: dict[int, str] = {r.product_id: (r.code or "") for r in prods}
 
-        # Estimate total: products × combos per product (not exact, updated live)
-        combos_per = 1
-        for og in body.option_groups:
-            combos_per *= max(len(og.values), 1)
-        job["total"] = len(body.product_ids) * combos_per
-
-        for pid in body.product_ids:
-            base_code = prod_code_map.get(pid, f"product_{pid}")
-
-            # Fetch current stocks from Shoper
-            try:
-                stocks: list[dict] = await client.get_filtered(
-                    "/product-stocks", {"product_id": pid}
-                )
-            except Exception as exc:
-                job["log"].append(f"ERR [{base_code}] fetch stocks: {exc}")
-                job["err"] += combos_per
-                job["done"] += combos_per
-                continue
-
-            # Build existing stock map: options_key -> stock (for PUT)
-            # and existing_codes set (for dedup)
-            existing_by_options: dict[str, dict] = {}
-            existing_codes: set[str] = set()
-            has_variants = False
-            for s in stocks:
-                opts = s.get("options")
-                code = (s.get("code") or "").strip()
-                if opts and isinstance(opts, dict):
-                    has_variants = True
-                    key = _options_key(opts, body.option_groups)
-                    existing_by_options[key] = s
-                if code:
-                    existing_codes.add(code.upper())
-
-            # Generate all combinations
-            group_value_lists: list[list[OptionValueMapping]] = [og.values for og in body.option_groups]
-            for combo in itertools.product(*group_value_lists):
-                # Build options dict {group_id: value_id}
-                options_dict: dict[str, str] = {og.group_id: v.value_id for og, v in zip(body.option_groups, combo)}
-                key = _options_key(options_dict, body.option_groups)
-
-                # Build code
-                suffixes = [v.suffix for v in combo]
-                variant_code = "-".join([base_code] + [s for s in suffixes if s])
-                price = prices_upper.get(variant_code.upper(), 0.0)
-
-                existing = existing_by_options.get(key)
-
-                if existing:
-                    existing_code = (existing.get("code") or "").strip()
-                    if existing_code and existing_code.upper() == variant_code.upper():
-                        job["log"].append(f"SKIP [{variant_code}] kod już ustawiony")
-                        job["skip"] += 1
-                    else:
-                        payload: dict[str, Any] = {"code": variant_code}
-                        if price > 0:
-                            payload["price"] = price
-                        try:
-                            await asyncio.sleep(RATE_DELAY)
-                            await client.put(f"/product-stocks/{existing['stock_id']}", payload)
-                            job["log"].append(f"PUT [{variant_code}] OK (stock_id={existing['stock_id']})")
-                            job["ok"] += 1
-                        except Exception as exc:
-                            job["log"].append(f"ERR PUT [{variant_code}]: {exc}")
-                            job["err"] += 1
-                elif body.create_missing:
-                    payload = {
-                        "product_id": pid,
-                        "code": variant_code,
-                        "price": price,
-                        "stock": 0,
-                        "active": True,
-                        "extended": 1,
-                        "options": {og.group_id: v.value_id for og, v in zip(body.option_groups, combo)},
-                    }
-                    try:
-                        await asyncio.sleep(RATE_DELAY)
-                        result = await client.post("/product-stocks", payload)
-                        job["log"].append(f"POST [{variant_code}] OK (new stock_id={result})")
-                        job["ok"] += 1
-                    except Exception as exc:
-                        job["log"].append(f"ERR POST [{variant_code}]: {exc}")
-                        job["err"] += 1
-                else:
-                    job["log"].append(f"SKIP [{variant_code}] brak stocku, create_missing=false")
-                    job["skip"] += 1
-
-                job["done"] += 1
+        if body.supplement_mode:
+            await _run_supplement(job, body, client, prod_code_map, prices_upper)
+        else:
+            await _run_standard(job, body, client, prod_code_map, prices_upper)
 
     except Exception as exc:
         job["log"].append(f"FATAL: {exc}")
@@ -569,9 +587,222 @@ async def _run_apply_job(
     finally:
         await client.close()
         job["status"] = "done"
-        # Keep only last 500 log lines
         if len(job["log"]) > 500:
             job["log"] = job["log"][-500:]
+
+
+async def _run_standard(
+    job: dict,
+    body: ApplyCodesRequest,
+    client: "ShoperClient",
+    prod_code_map: dict[int, str],
+    prices_upper: dict[str, float],
+) -> None:
+    """Standard mode: iterate panel combos, PUT existing stocks, POST missing ones."""
+    combos_per = 1
+    for og in body.option_groups:
+        combos_per *= max(len(og.values), 1)
+    job["total"] = len(body.product_ids) * combos_per
+
+    for pid in body.product_ids:
+        base_code = prod_code_map.get(pid, f"product_{pid}")
+
+        try:
+            stocks: list[dict] = await client.get_filtered("/product-stocks", {"product_id": pid})
+        except Exception as exc:
+            job["log"].append(f"ERR [{base_code}] fetch stocks: {exc}")
+            job["err"] += combos_per
+            job["done"] += combos_per
+            continue
+
+        existing_by_options: dict[str, dict] = {}
+        for s in stocks:
+            opts = s.get("options")
+            if opts and isinstance(opts, dict):
+                key = _options_key(opts, body.option_groups)
+                existing_by_options[key] = s
+
+        group_value_lists: list[list[OptionValueMapping]] = [og.values for og in body.option_groups]
+        for combo in itertools.product(*group_value_lists):
+            options_dict: dict[str, str] = {og.group_id: v.value_id for og, v in zip(body.option_groups, combo)}
+            key = _options_key(options_dict, body.option_groups)
+            suffixes = [v.suffix for v in combo]
+            variant_code = "-".join([base_code] + [sf for sf in suffixes if sf])
+            price = prices_upper.get(variant_code.upper(), 0.0)
+            existing = existing_by_options.get(key)
+
+            if existing:
+                existing_code = (existing.get("code") or "").strip()
+                if existing_code and existing_code.upper() == variant_code.upper():
+                    job["log"].append(f"SKIP [{variant_code}] kod już ustawiony")
+                    job["skip"] += 1
+                else:
+                    payload: dict[str, Any] = {"code": variant_code}
+                    if price > 0:
+                        payload["price"] = price
+                    try:
+                        await asyncio.sleep(RATE_DELAY)
+                        await client.put(f"/product-stocks/{existing['stock_id']}", payload)
+                        job["log"].append(f"PUT [{variant_code}] OK (stock_id={existing['stock_id']})")
+                        job["ok"] += 1
+                    except Exception as exc:
+                        job["log"].append(f"ERR PUT [{variant_code}]: {exc}")
+                        job["err"] += 1
+            elif body.create_missing:
+                payload = {
+                    "product_id": pid,
+                    "code": variant_code,
+                    "price": price,
+                    "stock": 0,
+                    "active": True,
+                    "extended": 1,
+                    "options": options_dict,
+                }
+                try:
+                    await asyncio.sleep(RATE_DELAY)
+                    result = await client.post("/product-stocks", payload)
+                    job["log"].append(f"POST [{variant_code}] OK (new stock_id={result})")
+                    job["ok"] += 1
+                except Exception as exc:
+                    job["log"].append(f"ERR POST [{variant_code}]: {exc}")
+                    job["err"] += 1
+            else:
+                job["log"].append(f"SKIP [{variant_code}] brak stocku, create_missing=false")
+                job["skip"] += 1
+
+            job["done"] += 1
+
+
+async def _run_supplement(
+    job: dict,
+    body: ApplyCodesRequest,
+    client: "ShoperClient",
+    prod_code_map: dict[int, str],
+    prices_upper: dict[str, float],
+) -> None:
+    """Supplement mode: fix codes on ALL existing stocks (including extra-group ones).
+    For panel combos with no existing stock: POST new stock.
+    For stocks that have extra groups (groups not in panel): fix code using
+    panel suffixes + auto-suggested suffixes for extra group values, never POST new.
+    """
+    panel_gids = {og.group_id for og in body.option_groups}
+    panel_suffix_map: dict[str, dict[str, str]] = {
+        og.group_id: {v.value_id: v.suffix for v in og.values}
+        for og in body.option_groups
+    }
+    val_names_cache: dict[str, str] = {}
+
+    async def _resolve_value_name(vid: str) -> str:
+        if vid in val_names_cache:
+            return val_names_cache[vid]
+        try:
+            d = await client.get(f"/option-values/{vid}")
+            if d:
+                n = (d.get("translations") or {}).get("pl_PL", {})
+                name = (n.get("value") or n.get("name") or "").strip()
+                val_names_cache[vid] = name
+                return name
+        except Exception:
+            pass
+        val_names_cache[vid] = ""
+        return ""
+
+    for pid in body.product_ids:
+        base_code = prod_code_map.get(pid, f"product_{pid}")
+
+        try:
+            stocks: list[dict] = await client.get_filtered("/product-stocks", {"product_id": pid})
+        except Exception as exc:
+            job["log"].append(f"ERR [{base_code}] fetch stocks: {exc}")
+            job["err"] += 1
+            job["done"] += 1
+            continue
+
+        job["total"] += len(stocks)
+
+        # Track which panel combos already have a stock (for POST missing logic)
+        seen_panel_keys: set[str] = set()
+
+        for stock in stocks:
+            opts = stock.get("options") or {}
+            if not isinstance(opts, dict):
+                job["done"] += 1
+                continue
+
+            str_opts = {str(gid): str(vid) for gid, vid in opts.items()}
+            panel_opts = {gid: vid for gid, vid in str_opts.items() if gid in panel_gids}
+            extra_opts = {gid: vid for gid, vid in str_opts.items() if gid not in panel_gids}
+
+            panel_key = _options_key(panel_opts, body.option_groups)
+            seen_panel_keys.add(panel_key)
+
+            # Build expected code: panel suffixes in configured order, then extra auto-suffixes
+            code_parts = [base_code]
+            for og in body.option_groups:
+                vid = panel_opts.get(og.group_id, "")
+                suffix = panel_suffix_map[og.group_id].get(vid, "")
+                if suffix:
+                    code_parts.append(suffix)
+
+            for _gid, vid in sorted(extra_opts.items()):
+                await asyncio.sleep(0.05)
+                name = await _resolve_value_name(vid)
+                suffix = _auto_suffix(name) if name else vid[:4].upper()
+                if suffix:
+                    code_parts.append(suffix)
+
+            expected_code = "-".join(code_parts)
+            existing_code = (stock.get("code") or "").strip()
+            price = prices_upper.get(expected_code.upper(), 0.0)
+
+            if existing_code and existing_code.upper() == expected_code.upper():
+                job["log"].append(f"SKIP [{expected_code}] kod już ustawiony")
+                job["skip"] += 1
+            else:
+                payload: dict[str, Any] = {"code": expected_code}
+                if price > 0:
+                    payload["price"] = price
+                try:
+                    await asyncio.sleep(RATE_DELAY)
+                    await client.put(f"/product-stocks/{stock['stock_id']}", payload)
+                    job["log"].append(f"PUT [{expected_code}] OK (stock_id={stock['stock_id']})")
+                    job["ok"] += 1
+                except Exception as exc:
+                    job["log"].append(f"ERR PUT [{expected_code}]: {exc}")
+                    job["err"] += 1
+
+            job["done"] += 1
+
+        # POST missing panel combos (only stocks with NO extra groups)
+        if body.create_missing:
+            group_value_lists: list[list[OptionValueMapping]] = [og.values for og in body.option_groups]
+            for combo in itertools.product(*group_value_lists):
+                options_dict: dict[str, str] = {og.group_id: v.value_id for og, v in zip(body.option_groups, combo)}
+                panel_key = _options_key(options_dict, body.option_groups)
+                if panel_key in seen_panel_keys:
+                    continue
+                suffixes = [v.suffix for v in combo]
+                variant_code = "-".join([base_code] + [sf for sf in suffixes if sf])
+                price = prices_upper.get(variant_code.upper(), 0.0)
+                payload = {
+                    "product_id": pid,
+                    "code": variant_code,
+                    "price": price,
+                    "stock": 0,
+                    "active": True,
+                    "extended": 1,
+                    "options": options_dict,
+                }
+                try:
+                    await asyncio.sleep(RATE_DELAY)
+                    result = await client.post("/product-stocks", payload)
+                    job["log"].append(f"POST [{variant_code}] OK (nowy)")
+                    job["ok"] += 1
+                except Exception as exc:
+                    job["log"].append(f"ERR POST [{variant_code}]: {exc}")
+                    job["err"] += 1
+                job["done"] += 1
+                job["total"] += 1
 
 
 def _options_key(options: dict, ordered_groups: list[OptionGroupConfig]) -> str:
