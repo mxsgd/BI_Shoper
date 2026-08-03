@@ -11,3 +11,4 @@ python-dotenv
 python-multipart
 google-analytics-data
 openpyxl
+cryptography

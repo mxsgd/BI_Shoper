@@ -35,11 +35,15 @@ class ShoperClient:
         base_url: str,
         token: str,
         on_unauthorized: Callable[[], Awaitable[str | None]] | None = None,
+        store_id: int | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self._client: httpx.AsyncClient | None = None
         self.on_unauthorized = on_unauthorized
+        # Optional binding to a local store; prevents accidentally injecting
+        # a token that belongs to a different store.
+        self.store_id = store_id
 
     @property
     def headers(self) -> dict:
@@ -48,10 +52,22 @@ class ShoperClient:
             "Accept": "application/json",
         }
 
-    def set_token(self, token: str) -> None:
+    def set_token(self, token: str, *, store_id: int | None = None) -> None:
+        if (
+            store_id is not None
+            and self.store_id is not None
+            and store_id != self.store_id
+        ):
+            raise ValueError(
+                f"Token store mismatch: client is bound to store {self.store_id}, "
+                f"got token for store {store_id}"
+            )
         self.token = token
         if self._client and not self._client.is_closed:
             self._client.headers.update(self.headers)
+
+    def __repr__(self) -> str:  # never include the token
+        return f"<ShoperClient base_url={self.base_url!r} store_id={self.store_id}>"
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
