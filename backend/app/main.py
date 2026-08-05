@@ -9,14 +9,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .config import get_settings
 from .database import engine, Base, async_session
-from .routers import dashboard, orders, products, customers, stores, analytics, price_update, variant_codes
+from .routers import dashboard, orders, products, customers, stores, analytics, price_update, variant_codes, shoper_app
 from .scheduler.jobs import setup_scheduler
 from .services.transform_service import TransformService
 
 # Import all models to register them with SQLAlchemy
 from .models import (
     Store,
+    ShoperAppInstallation,
     PriceUpdateJobRecord,
     PriceUpdateLogRecord,
     RawOrder, RawOrderItem, RawProduct, RawCustomer,
@@ -108,6 +110,15 @@ async def _ensure_constraints(conn):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from sqlalchemy import text as sa_text
+
+    # Fail fast on incomplete App Store configuration. The message lists
+    # missing variable NAMES only - never their values.
+    missing = get_settings().validate_shoper_appstore()
+    if missing:
+        raise RuntimeError(
+            "Shoper App Store integration is enabled but required settings are "
+            f"missing: {', '.join(missing)}"
+        )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_constraints(conn)
@@ -151,6 +162,7 @@ app.include_router(stores.router)
 app.include_router(analytics.router)
 app.include_router(price_update.router)
 app.include_router(variant_codes.router)
+app.include_router(shoper_app.router)
 
 
 @app.get("/api/health")

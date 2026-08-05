@@ -20,7 +20,7 @@ from ..models.raw.raw_product_groups import RawProductGroup
 from ..models.raw.raw_product_stocks import RawProductStock
 from ..models.raw.raw_products import RawProduct
 from ..models.store import Store
-from ..services.shoper_auth import ensure_store_token
+from ..services.shoper_access import ensure_store_access_token
 from ..services.shoper_client import ShoperClient, ShoperUnauthorizedError
 from ..services.sync_service import SyncService
 
@@ -188,7 +188,7 @@ async def list_product_groups(
             raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
         svc = SyncService(db, store)
         try:
-            await ensure_store_token(db, store)
+            await ensure_store_access_token(db, store)
             await svc.sync_product_groups()
         except Exception as exc:
             raise HTTPException(503, f"Błąd synchronizacji zestawów: {exc}") from exc
@@ -228,7 +228,7 @@ async def sync_variant_group(
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
 
     try:
-        await ensure_store_token(db, store)
+        await ensure_store_access_token(db, store)
     except Exception as exc:
         raise HTTPException(503, f"Błąd autoryzacji: {exc}") from exc
 
@@ -371,11 +371,11 @@ async def detect_options_multi(
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
 
     try:
-        token = await ensure_store_token(db, store)
+        token = await ensure_store_access_token(db, store)
     except Exception as exc:
         raise HTTPException(503, f"Błąd autoryzacji: {exc}") from exc
 
-    client = ShoperClient(store.api_url, token)
+    client = ShoperClient(store.api_url, token, store_id=store.id)
     per_product: list[dict[str, set[str]]] = []
     total_stocks = 0
 
@@ -452,11 +452,11 @@ async def detect_options(
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
 
     try:
-        token = await ensure_store_token(db, store)
+        token = await ensure_store_access_token(db, store)
     except Exception as exc:
         raise HTTPException(503, f"Błąd autoryzacji: {exc}") from exc
 
-    client = ShoperClient(store.api_url, token)
+    client = ShoperClient(store.api_url, token, store_id=store.id)
     try:
         stocks: list[dict] = await client.get_filtered("/product-stocks", {"product_id": product_id})
 
@@ -529,7 +529,7 @@ async def apply_codes_start(
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
 
     try:
-        token = await ensure_store_token(db, store)
+        token = await ensure_store_access_token(db, store)
     except Exception as exc:
         raise HTTPException(503, f"Błąd autoryzacji: {exc}") from exc
 
@@ -565,7 +565,7 @@ async def _run_apply_job(
     job = _apply_jobs[job_id]
     prices_upper: dict[str, float] = {k.upper(): v for k, v in body.prices.items()}
 
-    client = ShoperClient(api_url, token)
+    client = ShoperClient(api_url, token, store_id=body.store_id)
     try:
         async with async_session() as db:
             prods = (
@@ -865,7 +865,7 @@ async def create_stocks(
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
 
     try:
-        token = await ensure_store_token(db, store)
+        token = await ensure_store_access_token(db, store)
     except Exception as exc:
         raise HTTPException(503, f"Błąd autoryzacji Shoper: {exc}") from exc
 
@@ -881,7 +881,7 @@ async def create_stocks(
         existing_codes = {(c or "").strip().upper() for c in rows if c}
 
     combos = list(itertools.product(*[s.values for s in body.segments]))
-    client = ShoperClient(store.api_url, token)
+    client = ShoperClient(store.api_url, token, store_id=store.id)
 
     results: list[dict] = []
 

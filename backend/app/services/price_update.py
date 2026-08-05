@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import async_session
 from ..models.raw.raw_product_stocks import RawProductStock
 from ..models.store import Store
-from .shoper_auth import ShoperAuthError, ensure_store_token
+from .shoper_access import ensure_store_access_token
+from .shoper_auth import ShoperAuthError
 from .shoper_client import ShoperClient, ShoperUnauthorizedError
 
 JobStatus = Literal["PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED"]
@@ -616,7 +617,7 @@ class PriceUpdateJobManager:
                 return
 
             async def _refresh_token() -> str:
-                # Osobna sesja DB — commit przy /auth nie psuje zapytań w trakcie joba.
+                # Osobna sesja DB — commit przy odświeżaniu nie psuje zapytań w trakcie joba.
                 async with async_session() as refresh_db:
                     store_row = (
                         await refresh_db.execute(
@@ -627,14 +628,18 @@ class PriceUpdateJobManager:
                     ).scalar_one_or_none()
                     if store_row is None:
                         raise ShoperAuthError("Store not found during token refresh")
-                    token = await ensure_store_token(
+                    token = await ensure_store_access_token(
                         refresh_db, store_row, force_refresh=True
                     )
-                store.api_token = token
-                client.set_token(token)
+                client.set_token(token, store_id=store.id)
                 return token
 
-            client = ShoperClient(store.api_url, store.api_token, on_unauthorized=_refresh_token)
+            client = ShoperClient(
+                store.api_url,
+                store.api_token,
+                on_unauthorized=_refresh_token,
+                store_id=store.id,
+            )
             product_min_in_file: dict[int, tuple[str, float]] = {}
             try:
                 if job.target_mode == "variant":

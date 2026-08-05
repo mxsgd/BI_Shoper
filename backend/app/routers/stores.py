@@ -6,9 +6,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from ..config import get_settings
 from ..database import get_db
 from ..models.store import Store
 from ..scheduler.jobs import get_sync_status, run_sync_now
+from ..services.shoper_access import store_auth_mode
 from ..services.shoper_auth import has_store_credentials
 
 router = APIRouter(prefix="/api/stores", tags=["stores"])
@@ -51,24 +53,34 @@ class SyncNowBody(BaseModel):
 async def list_stores(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Store).order_by(Store.name))
     stores = result.scalars().all()
-    return [
-        {
-            "id": s.id,
-            "name": s.name,
-            "api_url": s.api_url,
-            "is_active": s.is_active,
-            "last_sync_orders": str(s.last_sync_orders) if s.last_sync_orders else None,
-            "last_sync_products": str(s.last_sync_products) if s.last_sync_products else None,
-            "api_token_expires_at": str(s.api_token_expires_at) if s.api_token_expires_at else None,
-            "api_token_updated_at": str(s.api_token_updated_at) if s.api_token_updated_at else None,
-            "has_api_credentials": has_store_credentials(s),
-        }
-        for s in stores
-    ]
+    out = []
+    for s in stores:
+        out.append(
+            {
+                "id": s.id,
+                "name": s.name,
+                "api_url": s.api_url,
+                "is_active": s.is_active,
+                "last_sync_orders": str(s.last_sync_orders) if s.last_sync_orders else None,
+                "last_sync_products": str(s.last_sync_products) if s.last_sync_products else None,
+                "api_token_expires_at": str(s.api_token_expires_at) if s.api_token_expires_at else None,
+                "api_token_updated_at": str(s.api_token_updated_at) if s.api_token_updated_at else None,
+                "has_api_credentials": has_store_credentials(s),
+                "auth_mode": await store_auth_mode(db, s),
+            }
+        )
+    return out
 
 
 @router.post("/")
 async def create_store(body: StoreCreate, db: AsyncSession = Depends(get_db)):
+    # DEPRECATED: manual store creation with WebAPI credentials.
+    # New shops should install the app through the Shoper App Store.
+    if (body.api_login or body.api_password) and not get_settings().shoper_enable_legacy_webapi:
+        raise HTTPException(
+            status_code=400,
+            detail="Legacy WebAPI credentials are disabled (SHOPER_ENABLE_LEGACY_WEBAPI).",
+        )
     store = Store(
         name=body.name,
         api_url=body.api_url,
@@ -84,6 +96,12 @@ async def create_store(body: StoreCreate, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/{store_id}/auth")
 async def update_store_auth(store_id: int, body: StoreAuthUpdate, db: AsyncSession = Depends(get_db)):
+    # DEPRECATED legacy path - gated behind an explicit env flag.
+    if (body.api_login or body.api_password) and not get_settings().shoper_enable_legacy_webapi:
+        raise HTTPException(
+            status_code=400,
+            detail="Legacy WebAPI credentials are disabled (SHOPER_ENABLE_LEGACY_WEBAPI).",
+        )
     result = await db.execute(select(Store).where(Store.id == store_id))
     store = result.scalar_one_or_none()
     if not store:
