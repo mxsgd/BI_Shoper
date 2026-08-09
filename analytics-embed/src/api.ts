@@ -477,6 +477,7 @@ export interface DetectedOptionGroup {
   group_id: string;
   role: "size" | "fabric" | "other";
   values: DetectedOptionValue[];
+  available_values: DetectedOptionValue[];
 }
 
 export interface DetectOptionsResult {
@@ -503,6 +504,7 @@ export interface ApplyCodesRequest {
   option_groups: OptionGroupConfig[];
   prices: Record<string, number>;
   create_missing: boolean;
+  supplement_mode?: boolean;
 }
 
 export interface ApplyCodesJob {
@@ -567,6 +569,7 @@ export const api = {
   getPriceUpdateJob: (jobId: string) => get<PriceUpdateJob>(`/price-update/jobs/${jobId}`),
   getActivePriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/active"),
   getLatestPriceUpdateJob: () => get<{ job: PriceUpdateJob | null }>("/price-update/jobs/latest"),
+  cancelPriceUpdateJob: (jobId: string) => post<{ job_id: string; status: string; cancel_requested: boolean }>(`/price-update/jobs/${jobId}/cancel`, {}),
   getPriceUpdateLogs: (
     jobId: string,
     params: {
@@ -590,6 +593,8 @@ export const api = {
     get<VariantStock[]>(`/variant-codes/products/${productId}/stocks`),
   detectOptions: (productId: number) =>
     get<DetectOptionsResult>("/variant-codes/detect-options", { product_id: productId }),
+  detectOptionsMulti: (productIds: number[]) =>
+    get<DetectOptionsResult>("/variant-codes/detect-options-multi", { product_ids: productIds.join(",") }),
   startApplyCodes: (body: ApplyCodesRequest) =>
     post<{ job_id: string }>("/variant-codes/apply-codes/start", body),
   getApplyCodesJob: (jobId: string) =>

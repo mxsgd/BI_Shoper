@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import async_session
 from ..models.raw.raw_product_stocks import RawProductStock
 from ..models.store import Store
-from .shoper_auth import ShoperAuthError, ensure_store_token
+from .shoper_access import ensure_store_access_token
+from .shoper_auth import ShoperAuthError
 from .shoper_client import ShoperClient, ShoperUnauthorizedError
 
 JobStatus = Literal["PENDING", "RUNNING", "DONE", "FAILED", "CANCELLED"]
@@ -106,6 +107,7 @@ class PriceUpdateJob:
     current_code: str | None = None
     current_phase: str | None = None  # row | post_process
     duplicate_mode: str = "error"
+    cancel_requested: bool = False
     _last_persist_ts: float | None = field(default=None, repr=False, compare=False)
 
 
@@ -361,6 +363,17 @@ class PriceUpdateJobManager:
 
         return await persist.load_latest_job(store_id)
 
+    async def cancel_job(self, job_id: str) -> PriceUpdateJob | None:
+        """Żąda anulowania joba. Zwraca job lub None gdy nie znaleziono."""
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            if job.status not in ("PENDING", "RUNNING"):
+                return job
+            job.cancel_requested = True
+            return job
+
     async def get_logs(
         self,
         job_id: str,
@@ -604,7 +617,7 @@ class PriceUpdateJobManager:
                 return
 
             async def _refresh_token() -> str:
-                # Osobna sesja DB — commit przy /auth nie psuje zapytań w trakcie joba.
+                # Osobna sesja DB — commit przy odświeżaniu nie psuje zapytań w trakcie joba.
                 async with async_session() as refresh_db:
                     store_row = (
                         await refresh_db.execute(
@@ -615,14 +628,18 @@ class PriceUpdateJobManager:
                     ).scalar_one_or_none()
                     if store_row is None:
                         raise ShoperAuthError("Store not found during token refresh")
-                    token = await ensure_store_token(
+                    token = await ensure_store_access_token(
                         refresh_db, store_row, force_refresh=True
                     )
-                store.api_token = token
-                client.set_token(token)
+                client.set_token(token, store_id=store.id)
                 return token
 
-            client = ShoperClient(store.api_url, store.api_token, on_unauthorized=_refresh_token)
+            client = ShoperClient(
+                store.api_url,
+                store.api_token,
+                on_unauthorized=_refresh_token,
+                store_id=store.id,
+            )
             product_min_in_file: dict[int, tuple[str, float]] = {}
             try:
                 if job.target_mode == "variant":
@@ -637,7 +654,7 @@ class PriceUpdateJobManager:
 
                     async def _process_one(row: PriceUpdateRow) -> int | None:
                         async with sem:
-                            if _auth_exc:
+                            if _auth_exc or job.cancel_requested:
                                 return None
                             self._set_progress(
                                 job, phase="row", code=row.code, row_number=row.row_number
@@ -658,25 +675,37 @@ class PriceUpdateJobManager:
                     if _auth_exc:
                         raise _auth_exc[0]
 
-                    # Post-process wszystkich produktów (po zakończeniu fazy równoległej)
-                    for product_id in job.product_ids_in_file:
-                        if product_id not in post_processed:
-                            code = product_min_in_file.get(product_id, ("", 0))[0] or f"id={product_id}"
-                            self._set_progress(job, phase="post_process", code=code)
-                            try:
-                                await self._post_process_single_product(
-                                    client, job, product_id, product_min_in_file
-                                )
-                            except (ShoperUnauthorizedError, ShoperAuthError):
-                                raise
-                            except Exception as exc:
-                                await self._log_post_process_crash(
-                                    job, exc, label=f"post-process produkt {product_id}"
-                                )
-                            post_processed.add(product_id)
+                    if job.cancel_requested:
+                        job.status = "CANCELLED"
+                    else:
+                        # Post-process wszystkich produktów (po zakończeniu fazy równoległej)
+                        for product_id in job.product_ids_in_file:
+                            if job.cancel_requested:
+                                break
+                            if product_id not in post_processed:
+                                code = product_min_in_file.get(product_id, ("", 0))[0] or f"id={product_id}"
+                                self._set_progress(job, phase="post_process", code=code)
+                                try:
+                                    await self._post_process_single_product(
+                                        client, job, product_id, product_min_in_file
+                                    )
+                                except (ShoperUnauthorizedError, ShoperAuthError):
+                                    raise
+                                except Exception as exc:
+                                    await self._log_post_process_crash(
+                                        job, exc, label=f"post-process produkt {product_id}"
+                                    )
+                                post_processed.add(product_id)
+
+                        if not job.cancel_requested:
+                            job.status = "DONE"
+                        else:
+                            job.status = "CANCELLED"
 
                 else:
                     for row in job.rows:
+                        if job.cancel_requested:
+                            break
                         self._set_progress(
                             job, phase="row", code=row.code, row_number=row.row_number
                         )
@@ -687,7 +716,10 @@ class PriceUpdateJobManager:
                         except Exception as exc:
                             await self._log_row_crash(job, row, exc)
 
-                job.status = "DONE"
+                    if not job.cancel_requested:
+                        job.status = "DONE"
+                    else:
+                        job.status = "CANCELLED"
             except (ShoperUnauthorizedError, ShoperAuthError) as exc:
                 job.status = "FAILED"
                 job.fatal_error = f"Autoryzacja Shoper: {exc}"

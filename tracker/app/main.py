@@ -34,7 +34,6 @@ async def lifespan(_app: FastAPI):
             await conn.run_sync(Base.metadata.create_all)
         log.info("DB: schema ready (events table)")
     except Exception:
-        # Nie blokuj startu — healthcheck przejdzie, w logach widać brak DATABASE_URL / sieć
         log.exception("DB init failed — set DATABASE_URL (Railway Postgres). POST /api/event will fail until fixed.")
     yield
     await engine.dispose()

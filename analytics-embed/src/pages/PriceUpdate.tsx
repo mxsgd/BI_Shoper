@@ -60,6 +60,7 @@ export default function PriceUpdate() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [restoring, setRestoring] = useState(true);
   const [reconnectError, setReconnectError] = useState<string | null>(null);
   const jobRef = useRef<PriceUpdateJob | null>(null);
@@ -284,6 +285,18 @@ export default function PriceUpdate() {
     }
   }
 
+  async function handleCancel() {
+    if (!job?.job_id) return;
+    setCancelling(true);
+    try {
+      await api.cancelPriceUpdateJob(job.job_id);
+    } catch {
+      /* ignoruj — polling i tak zaktualizuje status */
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   function handleNewJob() {
     setJobState(null);
     jobRef.current = null;
@@ -300,15 +313,27 @@ export default function PriceUpdate() {
       <div className="mb-6">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-2xl font-bold">Aktualizacja cen</h2>
-          {hasJob && isJobTerminal && (
-            <button
-              type="button"
-              onClick={handleNewJob}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Nowy job
-            </button>
-          )}
+          <div className="flex gap-2">
+            {hasJob && jobRunning && (
+              <button
+                type="button"
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {cancelling ? "Zatrzymywanie…" : "Zatrzymaj"}
+              </button>
+            )}
+            {hasJob && isJobTerminal && (
+              <button
+                type="button"
+                onClick={handleNewJob}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Nowy job
+              </button>
+            )}
+          </div>
         </div>
         <p className="text-sm text-slate-500">
           Plik CSV lub TXT po kodach {isVariantMode ? "wariantów" : "produktów"}, postęp na żywo i logi operacji.

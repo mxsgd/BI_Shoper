@@ -1,3 +1,11 @@
+"""DEPRECATED: legacy Shoper WebAPI login/password auth (POST /auth).
+
+Kept only for stores that have not yet been migrated to the App Store
+Partner OAuth flow (see shoper_partner_auth.py / shoper_access.py).
+This path is disabled unless SHOPER_ENABLE_LEGACY_WEBAPI is set and is
+never used for stores with an App Store installation.
+"""
+
 import logging
 import os
 from dataclasses import dataclass

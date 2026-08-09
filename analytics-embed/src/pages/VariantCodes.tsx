@@ -14,6 +14,8 @@ interface MappedGroup {
   group_id: string;
   role: string;
   values: { value_id: string; value_name: string; suffix: string }[];
+  /** Full pool of values defined in Shoper for this group — for manual "add from pool". */
+  available: { value_id: string; value_name: string; suggested_suffix: string }[];
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -98,7 +100,7 @@ function parseMappingCsv(text: string): MappedGroup[] {
     if (parts.length < 4) continue;
     const [group_id, role, value_id, value_name, suffix = ""] = parts;
     if (!groups.has(group_id)) {
-      groups.set(group_id, { group_id, role, values: [] });
+      groups.set(group_id, { group_id, role, values: [], available: [] });
     }
     groups.get(group_id)!.values.push({ value_id, value_name, suffix });
   }
@@ -207,6 +209,12 @@ export default function VariantCodes() {
   const [startError, setStartError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
+  // ── Step 4: supplement (dogeneruj) job ────────────────────────────────────
+  const [suppJobId, setSuppJobId] = useState<string | null>(null);
+  const [suppJob, setSuppJob] = useState<ApplyCodesJob | null>(null);
+  const [suppStartError, setSuppStartError] = useState<string | null>(null);
+  const suppPollRef = useRef<number | null>(null);
+
   // ── Load groups on mount (sync names from /option-groups — fast) ───────
   useEffect(() => {
     api.getVariantGroups({ refresh: true })
@@ -222,6 +230,7 @@ export default function VariantCodes() {
     setSelectedIds(new Set());
     setProductSearch("");
     setMappedGroups([]);
+    setPendingPoolValue({});
     setDetectError(null);
     setJobId(null);
     setJob(null);
@@ -288,12 +297,15 @@ export default function VariantCodes() {
 
   // ── Detect options (Step 3) ───────────────────────────────────────────────
   const detectOptions = useCallback(async () => {
-    const firstId = [...selectedIds][0];
-    if (!firstId) return;
+    const ids = [...selectedIds];
+    if (!ids.length) return;
     setDetecting(true);
     setDetectError(null);
     try {
-      const res = await api.detectOptions(firstId);
+      // Multi-product detect → returns intersection of option groups
+      const res = ids.length === 1
+        ? await api.detectOptions(ids[0])
+        : await api.detectOptionsMulti(ids);
       const mapped: MappedGroup[] = res.groups.map((g: DetectedOptionGroup) => ({
         group_id: g.group_id,
         role: g.role,
@@ -301,6 +313,11 @@ export default function VariantCodes() {
           value_id: v.value_id,
           value_name: v.value_name,
           suffix: v.suggested_suffix,
+        })),
+        available: (g.available_values ?? []).map((v) => ({
+          value_id: v.value_id,
+          value_name: v.value_name,
+          suggested_suffix: v.suggested_suffix,
         })),
       }));
       setMappedGroups(mapped);
@@ -336,6 +353,38 @@ export default function VariantCodes() {
       [next[gIdx], next[target]] = [next[target], next[gIdx]];
       return next;
     });
+  };
+
+  /** Selected "add from pool" value_id per group index (controlled <select>). */
+  const [pendingPoolValue, setPendingPoolValue] = useState<Record<number, string>>({});
+
+  const addValueFromPool = (gIdx: number) => {
+    const valueId = pendingPoolValue[gIdx];
+    if (!valueId) return;
+    setMappedGroups((prev) =>
+      prev.map((g, gi) => {
+        if (gi !== gIdx) return g;
+        if (g.values.some((v) => v.value_id === valueId)) return g;
+        const pooled = g.available.find((v) => v.value_id === valueId);
+        if (!pooled) return g;
+        return {
+          ...g,
+          values: [
+            ...g.values,
+            { value_id: pooled.value_id, value_name: pooled.value_name, suffix: pooled.suggested_suffix },
+          ],
+        };
+      }),
+    );
+    setPendingPoolValue((prev) => ({ ...prev, [gIdx]: "" }));
+  };
+
+  const removeValue = (gIdx: number, vIdx: number) => {
+    setMappedGroups((prev) =>
+      prev.map((g, gi) =>
+        gi !== gIdx ? g : { ...g, values: g.values.filter((_, vi) => vi !== vIdx) },
+      ),
+    );
   };
 
   // ── CSV import / export ───────────────────────────────────────────────────
@@ -436,7 +485,7 @@ export default function VariantCodes() {
     }
   };
 
-  // Poll job status
+  // Poll regular job status
   useEffect(() => {
     if (!jobId) return;
     const poll = async () => {
@@ -456,6 +505,56 @@ export default function VariantCodes() {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
   }, [jobId]);
+
+  const startSupplement = async () => {
+    if (!selectedProducts.length || !mappedGroups.length) return;
+    setSuppStartError(null);
+    setSuppJob(null);
+
+    const optionGroups: OptionGroupConfig[] = mappedGroups.map((g) => ({
+      group_id: g.group_id,
+      role: g.role,
+      values: g.values.filter((v) => v.suffix).map((v) => ({
+        value_id: v.value_id,
+        suffix: v.suffix,
+      })),
+    }));
+
+    try {
+      const res = await api.startApplyCodes({
+        store_id: 1,
+        product_ids: selectedProducts.map((p) => p.product_id),
+        option_groups: optionGroups,
+        prices,
+        create_missing: true,
+        supplement_mode: true,
+      });
+      setSuppJobId(res.job_id);
+    } catch (e) {
+      setSuppStartError(e instanceof Error ? e.message : "Błąd uruchamiania dogenerowania");
+    }
+  };
+
+  // Poll supplement job status
+  useEffect(() => {
+    if (!suppJobId) return;
+    const poll = async () => {
+      try {
+        const j = await api.getApplyCodesJob(suppJobId);
+        setSuppJob(j);
+        if (j.status === "done") {
+          if (suppPollRef.current) window.clearInterval(suppPollRef.current);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void poll();
+    suppPollRef.current = window.setInterval(poll, 2000);
+    return () => {
+      if (suppPollRef.current) window.clearInterval(suppPollRef.current);
+    };
+  }, [suppJobId]);
 
   // ── Step state ────────────────────────────────────────────────────────────
   const step1done = selectedGroup !== null;
@@ -505,6 +604,7 @@ export default function VariantCodes() {
                   setAllProducts([]);
                   setSelectedIds(new Set());
                   setMappedGroups([]);
+                  setPendingPoolValue({});
                   setJobId(null);
                   setJob(null);
                 }}
@@ -643,7 +743,9 @@ export default function VariantCodes() {
                   </p>
                 ) : (
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Wykryj opcje z pierwszego zaznaczonego produktu, następnie zmapuj wartości do suffixów
+                    {selectedIds.size > 1
+                      ? `Wykryj wspólne grupy opcji dla ${selectedIds.size} zaznaczonych produktów (przecięcie), następnie zmapuj wartości do suffixów`
+                      : "Wykryj opcje z zaznaczonego produktu, następnie zmapuj wartości do suffixów"}
                   </p>
                 )}
               </div>
@@ -684,7 +786,7 @@ export default function VariantCodes() {
                   {detecting && (
                     <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                   )}
-                  {detecting ? "Wykrywam…" : "Wykryj opcje z Shopera"}
+                  {detecting ? "Wykrywam…" : selectedIds.size > 1 ? `Wykryj wspólne opcje (${selectedIds.size} prod.)` : "Wykryj opcje z Shopera"}
                 </button>
               </div>
             </div>
@@ -782,6 +884,7 @@ export default function VariantCodes() {
                           <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-slate-500 w-8">#</th>
                           <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-slate-500">Wartość opcji</th>
                           <th className="text-left px-3 py-1.5 text-[11px] font-semibold text-slate-500 w-32">Suffix w kodzie</th>
+                          <th className="w-8"></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -798,10 +901,56 @@ export default function VariantCodes() {
                                 className="w-full rounded border border-slate-200 px-2 py-0.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-300 placeholder:text-slate-300"
                               />
                             </td>
+                            <td className="px-2 py-1.5 text-center">
+                              <button
+                                type="button"
+                                onClick={() => removeValue(gIdx, vIdx)}
+                                title="Usuń wartość z listy"
+                                className="text-slate-300 hover:text-rose-500 transition-colors"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
+
+                    {/* Add from full pool — values not (yet) common to every selected product */}
+                    {(() => {
+                      const usedIds = new Set(group.values.map((v) => v.value_id));
+                      const remaining = group.available.filter((v) => !usedIds.has(v.value_id));
+                      if (!remaining.length) return null;
+                      return (
+                        <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 border-t border-slate-200">
+                          <span className="text-[11px] text-slate-500 shrink-0">Dodaj z całej puli:</span>
+                          <select
+                            value={pendingPoolValue[gIdx] ?? ""}
+                            onChange={(e) =>
+                              setPendingPoolValue((prev) => ({ ...prev, [gIdx]: e.target.value }))
+                            }
+                            className="flex-1 min-w-0 text-xs rounded border border-slate-200 px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                          >
+                            <option value="">— wybierz wartość ({remaining.length}) —</option>
+                            {remaining.map((v) => (
+                              <option key={v.value_id} value={v.value_id}>
+                                {v.value_name} (id: {v.value_id})
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => addValueFromPool(gIdx)}
+                            disabled={!pendingPoolValue[gIdx]}
+                            className="px-3 py-1 text-xs font-medium rounded-lg border border-indigo-200 bg-white text-indigo-600 hover:bg-indigo-50 disabled:opacity-40 disabled:hover:bg-white transition-colors whitespace-nowrap"
+                          >
+                            + Dodaj
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
@@ -824,21 +973,39 @@ export default function VariantCodes() {
                   )}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => void startApply()}
-                disabled={!!jobId && job?.status !== "done"}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-2"
-              >
-                {jobId && job?.status !== "done" ? (
-                  <>
-                    <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                    Trwa…
-                  </>
-                ) : (
-                  "Zastosuj kody w Shoper"
-                )}
-              </button>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void startSupplement()}
+                  disabled={!!suppJobId && suppJob?.status !== "done"}
+                  title="Uzupełnia kody dla wariantów w panelu. Dla produktów z dodatkowymi grupami opcji (spoza panelu) naprawia istniejące kody bez tworzenia nowych."
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+                >
+                  {suppJobId && suppJob?.status !== "done" ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      Dogeneruje…
+                    </>
+                  ) : (
+                    "Dogeneruj"
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void startApply()}
+                  disabled={!!jobId && job?.status !== "done"}
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-2"
+                >
+                  {jobId && job?.status !== "done" ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                      Trwa…
+                    </>
+                  ) : (
+                    "Zastosuj kody w Shoper"
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="p-4 space-y-4">
@@ -847,11 +1014,62 @@ export default function VariantCodes() {
                   {startError}
                 </p>
               )}
+              {suppStartError && (
+                <p className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">
+                  {suppStartError}
+                </p>
+              )}
+
+              {/* Supplement job progress */}
+              {suppJob && (
+                <div className="border border-emerald-200 rounded-lg overflow-hidden">
+                  <div className="flex items-center gap-3 px-4 py-2 bg-emerald-50 border-b border-emerald-100">
+                    <span className="text-xs font-semibold text-emerald-700">Dogeneruj</span>
+                    <div className="flex-1">
+                      <ProgressBar value={suppJob.done} max={Math.max(suppJob.total, suppJob.done, 1)} />
+                    </div>
+                    <span className="text-xs text-slate-500 shrink-0 tabular-nums">
+                      {suppJob.done} / {suppJob.total || "?"}
+                    </span>
+                    <span
+                      className={`text-xs font-semibold shrink-0 ${
+                        suppJob.status === "done" ? "text-emerald-600" : "text-emerald-500"
+                      }`}
+                    >
+                      {suppJob.status === "done" ? "Gotowe" : "W toku…"}
+                    </span>
+                  </div>
+                  <div className="flex gap-6 px-4 py-2 text-xs border-b border-slate-100">
+                    <span className="text-emerald-600 font-medium">OK: {suppJob.ok}</span>
+                    <span className="text-slate-500">Pominięto: {suppJob.skip}</span>
+                    {suppJob.err > 0 && (
+                      <span className="text-rose-600 font-medium">Błędy: {suppJob.err}</span>
+                    )}
+                  </div>
+                  <div className="max-h-40 overflow-y-auto p-3 font-mono text-[11px] text-slate-600 space-y-0.5">
+                    {suppJob.log.slice(-60).map((line, i) => (
+                      <div
+                        key={i}
+                        className={
+                          line.startsWith("ERR") || line.startsWith("FATAL")
+                            ? "text-rose-600"
+                            : line.startsWith("SKIP")
+                            ? "text-slate-400"
+                            : "text-emerald-700"
+                        }
+                      >
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Live job progress */}
               {job && (
                 <div className="border border-slate-200 rounded-lg overflow-hidden">
-                  <div className="flex items-center gap-4 px-4 py-3 bg-slate-50 border-b border-slate-200">
+                  <div className="flex items-center gap-3 px-4 py-2 bg-slate-50 border-b border-slate-200">
+                    <span className="text-xs font-semibold text-slate-600">Zastosuj kody</span>
                     <div className="flex-1">
                       <ProgressBar value={job.done} max={Math.max(job.total, job.done, 1)} />
                     </div>

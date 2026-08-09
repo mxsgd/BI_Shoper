@@ -1,0 +1,24 @@
+Mając na uwadze bezpieczeństwo naszych klientów i naszych systemów poniżej przedstawiamy najistotniejsze punkty, które powinny zostać zastosowane w kontekście aplikacji dostarczanych przez Państwa do naszych sklepów.
+
+                * Możliwość listowania zawartości serwerów (Directory Listing) - Konfiguracja serwera, która umożliwia przeglądanie plików w folderach jest niedopuszczalna. Konfiguracja ta umożliwia przeprowadzenie rekonesansu aplikacji i identyfikację jej słabych punktów. Często umożliwia dostęp do danych wrażliwych typu .log, .txt, .bkp - gdzie przechowywane są dane do logowania, tokeny autoryzacyjne lub dane identyfikacyjne klienta.
+
+                * Dostęp do plików wrażliwych - Jeżeli na serwerze przechowywane są pliki wrażliwe, tj. pliki konfiguracyjne, pliki zawierające informacje o komponentach użytych przy tworzeniu aplikacji oraz ich wersji, pliki typu backup będących kopią zapasową plików konfiguracyjnych, pliki typu *.log/*.txt gdzie przechowywane są informacje o zdarzeniach z serwera lub interakcji aplikacji z klientem. Sytuacja w której dostęp do tego typu plików z zewnątrz jest możliwy jest niedopuszczalna. Odpytanie o tego typu pliki jakąkolwiek metodą powinno zawsze zwracać kod błędu: 403 - Forbidden.
+
+                Przykłady wrażliwych plików:
+                application.log
+                log.txt
+                composer.json
+                composer.phar
+                composer.lock
+                installed.json
+                git/*
+                idea/*
+
+                * Przechowywanie danych wrażliwych klienta - Dane wrażliwe użytkowników a w szczególności hasła powinny być przechowywane w sposób, który uniemożliwia dostęp do tego typu danych osobom postronnym. Niedopuszczalna jest sytuacja w której zapisywane jest hasło użytkownika do pliku .log lub .txt. Dodatkowo aplikacja nie powinna przetwarzać danych, których nie potrzebuje do swojego funkcjonowania.
+
+                * Przetwarzanie danych w aplikacji - aplikacja przetwarzając dane ze sklepu lub inne dane użytkownika powinna je za każdym razem sanityzować. Brak sanityzacji danych prowadzi do podatności typu Cross Site Scripting lub SQL-injection. W przypadku Cross Site Scripting możliwe będzie wykonanie dowolnego kodu JS (JavaScript) w przeglądarce ofiary. Z kolei w przypadku SQL-injection możliwa będzie kradzież całej bazy danych.
+
+                * Funkcjonalności aplikacji - aplikacje często oferują dodatkowe funkcje. Stosując je należy się upewnić czy funkcja nie daje dodatkowych możliwości potencjalnemu napastnikowi do wykorzystania jej. Przykładem może być np. funkcja uploadu awataru - doświadczony napastnik będzie w stanie wykorzystać ją do uploadu dowolnego pliku innego niż ten z rozszerzeniem .jpg, .gif, .png, co będzie skutkowało wykonaniem dowolnego kodu na serwerze, tzw. Remote Code Execution.
+                Stosując różnego rodzaju funkcje należy testować je pod kątem zabezpieczeń i tego w jaki sposób można ją wykorzystać w złym celu. Funkcje uploadu często zabezpieczone są tylko na froncie (za pomocą kodu JS), natomiast backend już przyjmuje dowolny payload wysłany przez użytkownika.
+
+                Dodatkowo warto zapoznać się z projektem OWASP-TOP10: https://owasp.org/Top10/A00_2021_Introduction/
