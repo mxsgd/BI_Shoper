@@ -6,7 +6,7 @@ Algorithm (mirrors dreamcommerce/appstore-sf-mvc-example HashValidator):
 2. Remove the ``hash`` field.
 3. Sort parameters alphabetically by key (byte-wise, like PHP ksort).
 4. Build the canonical string ``key=value&key=value`` (values as received,
-   no extra encoding or normalization).
+no extra encoding or normalization).
 5. Compute HMAC-SHA512 (hex) with the App Store secret.
 6. Compare with ``hmac.compare_digest``.
 """

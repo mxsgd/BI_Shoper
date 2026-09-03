@@ -6,9 +6,9 @@
 
 ---
 
-## 1. Czy API pozwala zrealizować PLAN.md od strony bazodanowej?
+## 1. Na ile Shoper API pozwala zrealizować PLAN.md od strony bazodanowej?
 
-**Tak.** Wszystkie tabele warstwy RAW mają odpowiedniki w Shoper REST API:
+
 
 | PLAN (RAW)        | Zasób API Shoper   | Uwagi |
 |-------------------|--------------------|--------|

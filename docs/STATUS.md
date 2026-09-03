@@ -55,7 +55,7 @@ Skrypt JS + microservice (Railway) zbierający eventy z frontend sklepu (page_vi
 
 ### Priorytet wysoki
 
-- [ ] **OAuth Partner API** — pełny flow instalacji aplikacji przez Shoper App Store (OAuth 2.0 z `client_id`/`client_secret`, callback `/auth/callback`, refresh_token). Aktualnie backend używa WebAPI login/password zamiast oficjalnego tokenu partnerskiego. Wymagane do opublikowania w App Store.
+- [x] **OAuth Partner API** — pełny flow instalacji aplikacji przez Shoper App Store (OAuth 2.0 z `client_id`/`client_secret`, callback `/auth/callback`, refresh_token). Aktualnie backend używa WebAPI login/password zamiast oficjalnego tokenu partnerskiego. Wymagane do opublikowania w App Store.
 - [ ] **Rejestracja w Shoper Partner Portal** — założenie aplikacji partnerskiej, ustalenie `panel_url`, zakresy (`orders`, `products`, `analytics`), certyfikacja.
 - [ ] **Alembic migracje** — formalny workflow migracji schematu DB. Aktualnie schemat tworzony skryptem `create_database.py`. Potrzebny `alembic init` + generowanie migracji przy każdej zmianie modeli.
 

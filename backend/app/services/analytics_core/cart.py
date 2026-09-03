@@ -7,8 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-def _safe_table_exists_sql(table: str) -> str:
-    return f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{table}')"
+from common import _safe_table_exists_sql
 
 class CartService:
     def __init__(self, db: AsyncSession):
