@@ -3,6 +3,7 @@
 from .store import Store
 from .shoper_app_installation import ShoperAppInstallation
 from .price_update_job import PriceUpdateJobRecord, PriceUpdateLogRecord
+from .app_setting import AppSetting
 
 # RAW layer (staging - 1:1 with Shoper API)
 from .raw import (
@@ -54,6 +55,7 @@ __all__ = [
     "ShoperAppInstallation",
     "PriceUpdateJobRecord",
     "PriceUpdateLogRecord",
+    "AppSetting",
     # RAW layer
     "RawOrder",
     "RawOrderItem",

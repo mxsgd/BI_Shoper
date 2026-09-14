@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .database import engine, Base, async_session
-from .routers import dashboard, orders, products, customers, stores, analytics, price_update, variant_codes, shoper_app
+from .routers import dashboard, orders, products, customers, stores, analytics, price_update, variant_codes, shoper_app, settings
 from .scheduler.jobs import setup_scheduler
 from .services.transform_service import TransformService
 
@@ -163,6 +163,7 @@ app.include_router(analytics.router)
 app.include_router(price_update.router)
 app.include_router(variant_codes.router)
 app.include_router(shoper_app.router)
+app.include_router(settings.router)
 
 
 @app.get("/api/health")
