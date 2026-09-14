@@ -47,3 +47,6 @@ def date_bucket_series_sql(group_by: Literal["day", "week", "month"]) -> str:
         "interval '1 month'"
         ") AS b(bucket)"
     )
+
+def _safe_table_exists_sql(table: str) -> str:
+    return f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{table}')"
