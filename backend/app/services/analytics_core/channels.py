@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from typing_extensions import Literal
-from common import date_bucket_series_sql
+from .common import date_bucket_series_sql
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

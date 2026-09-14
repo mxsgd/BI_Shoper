@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from common import _safe_table_exists_sql
+from .common import _safe_table_exists_sql
 
 class CartService:
     def __init__(self, db: AsyncSession):

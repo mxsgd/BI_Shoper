@@ -2,7 +2,7 @@ from datetime import date, timedelta, datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from common import _safe_table_exists_sql
+from .common import _safe_table_exists_sql
 
 class TrackerService:
     def __init__(self, db: AsyncSession):
@@ -19,7 +19,7 @@ class TrackerService:
             since_epoch = int(since_dt.timestamp())
         
             exists_sql = text(_safe_table_exists_sql("tracker_events_local"))
-            if not (await db.execute(exists_sql)).scalar():
+            if not (await self.db.execute(exists_sql)).scalar():
                 return {
                     "period_days": period,
                     "total_events": 0,
@@ -37,7 +37,7 @@ class TrackerService:
                 FROM tracker_events_local
                 WHERE timestamp >= :since_epoch
             """)
-            agg_row = (await db.execute(agg_sql, {"since_epoch": since_epoch})).one()
+            agg_row = (await self.db.execute(agg_sql, {"since_epoch": since_epoch})).one()
         
             total_events = int(agg_row.total_events or 0)
             distinct_users = int(agg_row.distinct_users or 0)
@@ -50,7 +50,7 @@ class TrackerService:
                 ORDER BY cnt DESC
                 LIMIT 20
             """)
-            by_event_rows = (await db.execute(by_event_sql, {"since_epoch": since_epoch})).all()
+            by_event_rows = (await self.db.execute(by_event_sql, {"since_epoch": since_epoch})).all()
         
             top_urls_sql = text("""
                 SELECT url, COUNT(*) AS cnt
@@ -60,7 +60,7 @@ class TrackerService:
                 ORDER BY cnt DESC
                 LIMIT 20
             """)
-            top_url_rows = (await db.execute(top_urls_sql, {"since_epoch": since_epoch})).all()
+            top_url_rows = (await self.db.execute(top_urls_sql, {"since_epoch": since_epoch})).all()
         
             return {
                 "period_days": period,
