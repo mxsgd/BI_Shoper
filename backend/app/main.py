@@ -134,6 +134,13 @@ async def lifespan(app: FastAPI):
     async with async_session() as db:
         ts = TransformService(db)
         await ts.ensure_dim_date()
+    from .services.price_update_persistence import fail_orphaned_jobs
+
+    orphaned = await fail_orphaned_jobs()
+    if orphaned:
+        logging.getLogger(__name__).warning(
+            "Marked %d orphaned price-update job(s) as FAILED on startup", orphaned
+        )
     setup_scheduler()
     yield
     await engine.dispose()

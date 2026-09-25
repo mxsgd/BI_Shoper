@@ -443,6 +443,15 @@ export interface TrackingSettings {
   ga4_property_id_is_override: boolean;
 }
 
+export interface Ga4ResyncStatus {
+  status: "idle" | "running" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  result: Record<string, unknown> | null;
+  already_running?: boolean;
+}
+
 export interface StoreSyncStatus {
   store_id: number | null;
   scope: string | null;
@@ -570,6 +579,8 @@ export const api = {
   getTrackingSettings: () => get<TrackingSettings>("/settings/tracking"),
   updateTrackingSettings: (body: { ga4_measurement_id: string | null; ga4_property_id: string | null }) =>
     put<TrackingSettings>("/settings/tracking", body),
+  resyncGa4: (days = 90) => post<{ started?: boolean; already_running?: boolean }>("/settings/tracking/resync", { days }),
+  getGa4ResyncStatus: () => get<Ga4ResyncStatus>("/settings/tracking/resync-status"),
   createPriceUpdateJob: (
     file: File,
     options: {

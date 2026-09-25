@@ -200,6 +200,28 @@ class GA4SyncService:
         """Pierwsze wypełnienie okna — sync_missing_days dogra wszystkie brakujące dni."""
         return await self.sync_missing_days(window_days=days)
 
+    RAW_TABLES = (
+        "raw_ga4_traffic",
+        "raw_ga4_sources",
+        "raw_ga4_pages",
+        "raw_ga4_geo",
+        "raw_ga4_devices",
+        "raw_ga4_funnel",
+        "raw_ga4_funnel_devices",
+        "raw_ga4_cart_products",
+    )
+
+    async def clear_all(self) -> dict[str, int]:
+        """Delete all previously-synced GA4 rows — used when switching to a
+        different GA4 property, so stale data from the old property doesn't
+        linger alongside freshly-backfilled data from the new one."""
+        deleted: dict[str, int] = {}
+        for table in self.RAW_TABLES:
+            result = await self.db.execute(text(f"DELETE FROM {table}"))
+            deleted[table] = result.rowcount or 0
+        await self.db.commit()
+        return deleted
+
     async def _sync_traffic(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                             FilterExpression, Filter, date_str, target_date):
         response = _run_report(

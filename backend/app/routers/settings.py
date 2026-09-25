@@ -1,11 +1,13 @@
+import asyncio
 import re
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..database import get_db
+from ..scheduler.jobs import get_ga4_resync_status, run_ga4_resync
 from ..services.app_settings_service import (
     GA4_MEASUREMENT_ID_KEY,
     GA4_PROPERTY_ID_KEY,
@@ -72,3 +74,25 @@ async def update_tracking_settings(body: TrackingSettingsUpdate, db: AsyncSessio
         ga4_property_id=effective_property_id,
         ga4_property_id_is_override=bool(body.ga4_property_id),
     )
+
+
+class Ga4ResyncRequest(BaseModel):
+    days: int = Field(default=90, ge=1, le=365)
+
+
+@router.post("/tracking/resync")
+async def resync_ga4(body: Ga4ResyncRequest = Ga4ResyncRequest()):
+    """Wipe previously-synced GA4 rows and backfill fresh from the currently
+    configured property — call after switching GA4 tag/property so old data
+    doesn't linger next to the new data."""
+    status = get_ga4_resync_status()
+    if status.get("status") == "running":
+        return {"already_running": True, **status}
+
+    asyncio.create_task(run_ga4_resync(body.days))
+    return {"started": True, "days": body.days}
+
+
+@router.get("/tracking/resync-status")
+async def get_resync_status():
+    return get_ga4_resync_status()

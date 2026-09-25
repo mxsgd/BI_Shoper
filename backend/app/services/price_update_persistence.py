@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..database import async_session
@@ -199,6 +199,25 @@ async def load_latest_job(store_id: int) -> PriceUpdateJob | None:
         if row is None:
             return None
         return _record_to_job(row)
+
+
+async def fail_orphaned_jobs() -> int:
+    """Mark PENDING/RUNNING jobs as FAILED on startup — their in-memory worker
+    task died with the previous process, so they'd otherwise sit "active"
+    forever (with a nonsense ETA) without ever making further progress.
+    Returns the number of jobs marked."""
+    async with async_session() as db:
+        result = await db.execute(
+            update(PriceUpdateJobRecord)
+            .where(PriceUpdateJobRecord.status.in_(("PENDING", "RUNNING")))
+            .values(
+                status="FAILED",
+                fatal_error="Przerwane przez restart serwera (proces workera zakończył się nieoczekiwanie).",
+                finished_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+        return result.rowcount or 0
 
 
 async def load_logs(
