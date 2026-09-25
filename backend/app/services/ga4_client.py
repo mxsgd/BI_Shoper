@@ -32,7 +32,7 @@ def _resolve_credentials_path(path: str) -> str:
     return path
 
 
-def _get_ga4_client():
+def _get_ga4_client(property_id_override: str | None = None):
     """Lazy import so the app starts even without the google package installed."""
     from google.analytics.data_v1beta import BetaAnalyticsDataClient
     from google.analytics.data_v1beta.types import (
@@ -41,11 +41,12 @@ def _get_ga4_client():
 
     settings = get_settings()
     creds_path = _resolve_credentials_path(settings.ga4_credentials_path)
-    if not settings.ga4_property_id or not creds_path:
+    raw_property_id = property_id_override or settings.ga4_property_id
+    if not raw_property_id or not creds_path:
         return None, None, None, None, None, None, None, None
 
     client = BetaAnalyticsDataClient.from_service_account_json(creds_path)
-    property_id = f"properties/{settings.ga4_property_id}"
+    property_id = f"properties/{raw_property_id}"
     return client, property_id, RunReportRequest, DateRange, Dimension, Metric, FilterExpression, Filter
 
 
@@ -96,6 +97,11 @@ class GA4SyncService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _property_id_override(self) -> str | None:
+        from .app_settings_service import get_setting, GA4_PROPERTY_ID_KEY
+
+        return await get_setting(self.db, GA4_PROPERTY_ID_KEY)
+
     async def _sync_part(self, counts: dict, errors: dict, key: str, coro):
         try:
             counts[key] = await coro
@@ -106,7 +112,7 @@ class GA4SyncService:
 
     async def sync_day(self, target_date: date) -> dict:
         """Pull all GA4 reports for a single day and upsert into raw tables."""
-        parts = _get_ga4_client()
+        parts = _get_ga4_client(await self._property_id_override())
         if parts[0] is None:
             logger.warning("GA4 not configured (GA4_PROPERTY_ID / GA4_CREDENTIALS_PATH missing)")
             return {"ok": False, "reason": "ga4_not_configured"}
@@ -140,7 +146,7 @@ class GA4SyncService:
 
     async def sync_missing_days(self, window_days: int | None = None) -> dict:
         """Pobierz z GA4 każdy brakujący dzień w oknie + odśwież dziś i wczoraj."""
-        parts = _get_ga4_client()
+        parts = _get_ga4_client(await self._property_id_override())
         if parts[0] is None:
             logger.warning("GA4 not configured (GA4_PROPERTY_ID / GA4_CREDENTIALS_PATH missing)")
             return {"ok": False, "reason": "ga4_not_configured"}
@@ -193,6 +199,28 @@ class GA4SyncService:
     async def backfill(self, days: int = 90) -> dict:
         """Pierwsze wypełnienie okna — sync_missing_days dogra wszystkie brakujące dni."""
         return await self.sync_missing_days(window_days=days)
+
+    RAW_TABLES = (
+        "raw_ga4_traffic",
+        "raw_ga4_sources",
+        "raw_ga4_pages",
+        "raw_ga4_geo",
+        "raw_ga4_devices",
+        "raw_ga4_funnel",
+        "raw_ga4_funnel_devices",
+        "raw_ga4_cart_products",
+    )
+
+    async def clear_all(self) -> dict[str, int]:
+        """Delete all previously-synced GA4 rows — used when switching to a
+        different GA4 property, so stale data from the old property doesn't
+        linger alongside freshly-backfilled data from the new one."""
+        deleted: dict[str, int] = {}
+        for table in self.RAW_TABLES:
+            result = await self.db.execute(text(f"DELETE FROM {table}"))
+            deleted[table] = result.rowcount or 0
+        await self.db.commit()
+        return deleted
 
     async def _sync_traffic(self, client, property_id, RunReportRequest, DateRange, Dimension, Metric,
                             FilterExpression, Filter, date_str, target_date):

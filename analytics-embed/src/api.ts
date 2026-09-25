@@ -26,6 +26,19 @@ async function post<T>(path: string, body: unknown = {}): Promise<T> {
   return res.json();
 }
 
+async function put<T>(path: string, body: unknown = {}): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
 async function postForm<T>(path: string, formData: FormData, params: Record<string, string | number | undefined> = {}): Promise<T> {
   const qs = new URLSearchParams({ store_id: String(STORE_ID) });
   for (const [k, v] of Object.entries(params)) {
@@ -424,6 +437,21 @@ export interface PriceUpdateLogsResponse {
   logs_in_memory?: number;
 }
 
+export interface TrackingSettings {
+  ga4_measurement_id: string | null;
+  ga4_property_id: string | null;
+  ga4_property_id_is_override: boolean;
+}
+
+export interface Ga4ResyncStatus {
+  status: "idle" | "running" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  result: Record<string, unknown> | null;
+  already_running?: boolean;
+}
+
 export interface StoreSyncStatus {
   store_id: number | null;
   scope: string | null;
@@ -548,6 +576,11 @@ export const api = {
   syncNow: (scope: "quick" | "all" | "orders" | "products" | "customers" | "reference" | "transform" | "ga4" = "quick") =>
     post<Record<string, unknown>>("/stores/sync-now", { store_id: STORE_ID, scope }),
   getSyncStatus: () => get<StoreSyncStatus>(`/stores/${STORE_ID}/sync-status`),
+  getTrackingSettings: () => get<TrackingSettings>("/settings/tracking"),
+  updateTrackingSettings: (body: { ga4_measurement_id: string | null; ga4_property_id: string | null }) =>
+    put<TrackingSettings>("/settings/tracking", body),
+  resyncGa4: (days = 90) => post<{ started?: boolean; already_running?: boolean }>("/settings/tracking/resync", { days }),
+  getGa4ResyncStatus: () => get<Ga4ResyncStatus>("/settings/tracking/resync-status"),
   createPriceUpdateJob: (
     file: File,
     options: {

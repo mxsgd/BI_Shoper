@@ -11,7 +11,9 @@ import Tracker from "./pages/Tracker";
 import Cart from "./pages/Cart";
 import PriceUpdate from "./pages/PriceUpdate";
 import VariantCodes from "./pages/VariantCodes";
+import Settings from "./pages/Settings";
 import { usePageView } from "./usePageView";
+import { useGtagConfig } from "./useGtagConfig";
 import { api } from "./api";
 
 const NAV = [
@@ -26,6 +28,7 @@ const NAV = [
   { to: "/cart", label: "Koszyk", icon: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" },
   { to: "/price-update", label: "Aktualizacja cen", icon: "M12 4v16m8-8H4" },
   { to: "/variant-codes", label: "Kody wariantów", icon: "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" },
+  { to: "/settings", label: "Ustawienia", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
 ];
 
 function Sidebar() {
@@ -194,6 +197,7 @@ function Sidebar() {
 
 export default function App() {
   usePageView();
+  useGtagConfig();
 
   return (
     <div className="flex min-h-screen">
@@ -212,6 +216,7 @@ export default function App() {
           <Route path="/cart" element={<Cart />} />
           <Route path="/price-update" element={<PriceUpdate />} />
           <Route path="/variant-codes" element={<VariantCodes />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
     </div>

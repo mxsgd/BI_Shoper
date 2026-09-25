@@ -35,7 +35,7 @@
 ## 2. Ogólne zasady API (na podstawie PLAN.md i dokumentacji)
 
 - **Autoryzacja:** Bearer token w nagłówku `Authorization`.  
-- **Baza URL:** `https://{sklep}/webapi/rest/` (np. `https://mk-foam.pl/webapi/rest/`).  
+- **Baza URL:** `https://{sklep}/webapi/rest/` (np. `https://sklep-mkfoam.pl/webapi/rest/`).  
 - **Filtry:** format `filters=json.dumps({"pole": wartość})` (NIE `filter[pole]`).  
 - **Paginacja:** parametry `limit` i `page`; odpowiedź zwraca `count` i `pages`.  
 - **Odpowiedź list:** element listy w `d["list"]` (może być dict lub list).  

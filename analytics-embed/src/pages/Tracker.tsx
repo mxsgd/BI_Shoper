@@ -110,8 +110,8 @@ export default function Tracker() {
                   width={140}
                 />
                 <Tooltip
-                  formatter={(v: number) => [v.toLocaleString("pl-PL"), "Liczba"]}
-                  labelFormatter={(l: string) => eventLabel(l)}
+                  formatter={(v) => [Number(v ?? 0).toLocaleString("pl-PL"), "Liczba"]}
+                  labelFormatter={(l) => eventLabel(String(l ?? ""))}
                 />
                 <Bar dataKey="count" radius={[0, 4, 4, 0]} isAnimationActive={false}>
                   {data.by_event.map((_, i) => (

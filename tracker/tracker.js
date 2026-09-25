@@ -4,12 +4,9 @@
   var ENDPOINT = script ? script.src.replace(/\/tracker\.js.*$/, "/api/event") : "/api/event";
 
   var STORAGE_KEY = "_trk_uid";
-<<<<<<< HEAD
-=======
   var SESSION_KEY = "_trk_sid";
   var SESSION_LAST_SEEN_KEY = "_trk_sid_last_seen";
   var SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
->>>>>>> dev
   var VIEW_ITEM_KEY = "_trk_view_item_sent";
   var CHECKOUT_KEY = "_trk_begin_checkout_sent";
   var CHECKOUT_STEP_PREFIX = "_trk_checkout_step_";
@@ -25,8 +22,6 @@
 
   var userId = getUserId();
 
-<<<<<<< HEAD
-=======
   function createSessionId() {
     return "s_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
@@ -46,7 +41,6 @@
     return sid;
   }
 
->>>>>>> dev
   function clean(value) {
     if (value == null) return "";
     return String(value).trim();
@@ -121,12 +115,6 @@
     return clean(crumbs[0].textContent);
   }
 
-<<<<<<< HEAD
-  function getProductContext() {
-    var jsonLd = productFromJsonLd();
-    var productId = firstNonEmpty([
-      jsonLd.product_id,
-=======
   function productFromPath(pathname) {
     var p = clean(pathname);
     if (!p) return {};
@@ -157,7 +145,6 @@
     var productId = firstNonEmpty([
       jsonLd.product_id,
       pathCtx.product_id,
->>>>>>> dev
       getAttr(["meta[property='product:retailer_item_id']", "meta[name='product:id']"], "content"),
       getAttr(["[data-product-id]", "[data-item-id]"], "data-product-id"),
       getAttr(["[data-item-id]"], "data-item-id"),
@@ -165,10 +152,7 @@
     ]);
     var productName = firstNonEmpty([
       jsonLd.product_name,
-<<<<<<< HEAD
-=======
       pathCtx.product_name,
->>>>>>> dev
       getAttr(["meta[property='og:title']"], "content"),
       getText(["h1[itemprop='name']", "h1.product-name", "h1"])
     ]);
@@ -203,8 +187,6 @@
     return p.indexOf("/product") !== -1 || p.indexOf("/produkt") !== -1 || p.indexOf("/p/") !== -1;
   }
 
-<<<<<<< HEAD
-=======
   function isLikelyCheckoutPath(path) {
     var p = clean(path).toLowerCase();
     if (!p) return false;
@@ -216,7 +198,6 @@
     );
   }
 
->>>>>>> dev
   function markOnce(key, value) {
     try {
       if (sessionStorage.getItem(key) === value) return false;
@@ -256,8 +237,6 @@
     });
   }
 
-<<<<<<< HEAD
-=======
   function normalizeItems(items) {
     if (!Array.isArray(items)) return [];
     return items
@@ -348,7 +327,6 @@
     };
   }
 
->>>>>>> dev
   function send(eventName, meta) {
     var sessionId = getSessionId();
     var ua = navigator.userAgent || "";
@@ -389,11 +367,7 @@
   }
 
   var p = location.pathname.toLowerCase();
-<<<<<<< HEAD
-  var isCheckout = p.indexOf("checkout") !== -1 || p.indexOf("zamowienie") !== -1 || p.indexOf("zamow") !== -1;
-=======
   var isCheckout = isLikelyCheckoutPath(p);
->>>>>>> dev
   if (isCheckout && markOnce(CHECKOUT_KEY, location.pathname)) {
     send("begin_checkout", {
       step: "entry",
@@ -405,16 +379,10 @@
   var title = (document.title || "").toLowerCase();
   var isPurchase = p.indexOf("thank") !== -1 || p.indexOf("dziekuj") !== -1 || p.indexOf("potwierdzenie") !== -1 || title.indexOf("dziękuj") !== -1 || title.indexOf("podsumowanie") !== -1;
   if (isPurchase && markOnce(PURCHASE_KEY, location.pathname)) {
-<<<<<<< HEAD
-    send("purchase", {
-      path: location.pathname
-    });
-=======
     var purchase = getPurchaseContext();
     send("purchase", Object.assign({
       path: location.pathname
     }, purchase));
->>>>>>> dev
   }
 
   // click + add_to_cart/remove_from_cart/checkout_step — any button / [role=button] / input[type=submit]
@@ -430,24 +398,16 @@
     var removeWords = ["usuń", "usun", "remove", "delete", "wyrzuć", "wyrzuc"];
     var isRemove = removeWords.some(function (w) { return text.indexOf(w) !== -1; }) ||
       el.className && String(el.className).toLowerCase().indexOf("remove") !== -1;
-<<<<<<< HEAD
-    var checkoutWords = ["dalej", "next", "kontynuuj", "przejdź", "przejdz", "zamawiam", "zamów", "zamow", "pay", "płacę", "place order"];
-    var isCheckoutAction = checkoutWords.some(function (w) { return text.indexOf(w) !== -1; });
-=======
     var checkoutWords = ["dalej", "next", "kontynuuj", "przejdź", "przejdz", "zamawiam", "zamów", "zamow", "do kasy", "kasa", "pay", "płacę", "place order"];
     var isCheckoutAction = checkoutWords.some(function (w) { return text.indexOf(w) !== -1; });
     var href = clean(el.getAttribute("href") || "");
     var goesToCheckout = isLikelyCheckoutPath(href);
->>>>>>> dev
 
     if (isCart) {
       var ctx = getProductContext();
       send("add_to_cart", Object.assign({}, meta, ctx));
     } else if (isRemove) {
       send("remove_from_cart", Object.assign({}, meta, getProductContext()));
-<<<<<<< HEAD
-    } else if (isCheckout && isCheckoutAction) {
-=======
     } else if (isCheckoutAction || goesToCheckout) {
       if (markOnce(CHECKOUT_KEY, location.pathname)) {
         send("begin_checkout", {
@@ -456,7 +416,6 @@
           source: "click_cta"
         });
       }
->>>>>>> dev
       sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "click");
     } else {
       send("click", meta);
@@ -464,13 +423,6 @@
   }, true);
 
   document.addEventListener("submit", function (e) {
-<<<<<<< HEAD
-    if (!isCheckout) return;
-    var form = e.target;
-    if (!form || !form.tagName) return;
-    var id = clean(form.id || "");
-    var name = clean(form.getAttribute("name") || "");
-=======
     var form = e.target;
     if (!form || !form.tagName) return;
     var formAction = clean(form.getAttribute("action") || "");
@@ -490,7 +442,6 @@
         source: "submit_form"
       });
     }
->>>>>>> dev
     sendCheckoutStep(checkoutStepFromPage(location.pathname, document.title), "submit:" + firstNonEmpty([id, name, "form"]));
   }, true);
 })();

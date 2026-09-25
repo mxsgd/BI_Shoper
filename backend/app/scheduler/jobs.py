@@ -22,6 +22,15 @@ scheduler = AsyncIOScheduler()
 _sync_statuses: dict[str, dict] = {}
 _sync_locks: dict[str, asyncio.Lock] = {}
 
+_ga4_resync_status: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "result": None,
+}
+_ga4_resync_lock = asyncio.Lock()
+
 
 def _sync_key(store_id: int | None) -> str:
     return "all" if store_id is None else str(store_id)
@@ -278,6 +287,37 @@ async def run_ga4_backfill() -> dict:
         except Exception as e:
             logger.error("GA4 backfill failed: %s", e)
             return {"ok": False, "error": str(e)}
+
+
+def get_ga4_resync_status() -> dict:
+    return dict(_ga4_resync_status)
+
+
+async def run_ga4_resync(days: int) -> dict:
+    """Wipe all previously-synced GA4 rows, then backfill `days` fresh from
+    the currently-configured property. Used after switching GA4 property/tag
+    in Ustawienia, so old-property data doesn't linger next to the new data."""
+    if _ga4_resync_lock.locked():
+        return {"already_running": True, **_ga4_resync_status}
+
+    async with _ga4_resync_lock:
+        _ga4_resync_status.update(
+            status="running", started_at=_now_iso(), finished_at=None, error=None, result=None,
+        )
+        try:
+            async with async_session() as db:
+                svc = GA4SyncService(db)
+                deleted = await svc.clear_all()
+            async with async_session() as db:
+                svc = GA4SyncService(db)
+                backfill_result = await svc.backfill(days)
+            result = {"deleted": deleted, "backfill": backfill_result}
+            _ga4_resync_status.update(status="done", finished_at=_now_iso(), result=result)
+            return result
+        except Exception as e:
+            logger.error("GA4 resync failed: %s", e)
+            _ga4_resync_status.update(status="error", finished_at=_now_iso(), error=str(e))
+            raise
 
 
 async def sync_ga4_hourly():
