@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { api } from "./api";
+import { STATIC_DEMO } from "./staticDemo";
 
 let loadedForId: string | null = null;
 
@@ -16,6 +17,7 @@ function loadGtagScript(measurementId: string) {
 /** Loads gtag.js using the measurement ID configured in Ustawienia (falls back to no-op if unset). */
 export function useGtagConfig() {
   useEffect(() => {
+    if (STATIC_DEMO) return;
     let disposed = false;
     api.getTrackingSettings()
       .then((s) => {

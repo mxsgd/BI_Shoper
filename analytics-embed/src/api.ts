@@ -1,7 +1,10 @@
+import { STATIC_DEMO, getSnapshot, readOnlyError } from "./staticDemo";
+
 const BASE = "/api";
 const STORE_ID = 1;
 
 async function get<T>(path: string, params: Record<string, string | number | undefined | null> = {}): Promise<T> {
+  if (STATIC_DEMO) return getSnapshot<T>(path, params);
   const qs = new URLSearchParams({ store_id: String(STORE_ID) });
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null) continue;
@@ -13,6 +16,7 @@ async function get<T>(path: string, params: Record<string, string | number | und
 }
 
 async function post<T>(path: string, body: unknown = {}): Promise<T> {
+  if (STATIC_DEMO) throw readOnlyError();
   const qs = new URLSearchParams({ store_id: String(STORE_ID) });
   const res = await fetch(`${BASE}${path}?${qs}`, {
     method: "POST",
@@ -27,6 +31,7 @@ async function post<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 async function put<T>(path: string, body: unknown = {}): Promise<T> {
+  if (STATIC_DEMO) throw readOnlyError();
   const res = await fetch(`${BASE}${path}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -40,6 +45,7 @@ async function put<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 async function postForm<T>(path: string, formData: FormData, params: Record<string, string | number | undefined> = {}): Promise<T> {
+  if (STATIC_DEMO) throw readOnlyError();
   const qs = new URLSearchParams({ store_id: String(STORE_ID) });
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined) continue;
