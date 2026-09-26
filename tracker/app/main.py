@@ -34,7 +34,7 @@ async def lifespan(_app: FastAPI):
             await conn.run_sync(Base.metadata.create_all)
         log.info("DB: schema ready (events table)")
     except Exception:
-        log.exception("DB init failed — set DATABASE_URL (Railway Postgres). POST /api/event will fail until fixed.")
+        log.exception("DB init failed — set DATABASE_URL. POST /api/event will fail until fixed.")
     yield
     await engine.dispose()
 
@@ -43,7 +43,6 @@ app = FastAPI(
     title="Event Tracker",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/swagger-ui",
     redoc_url="/redoc",
 )
 
@@ -63,8 +62,3 @@ async def health():
     """Preferowany healthcheck (lekki, bez bazy)."""
     return {"status": "ok"}
 
-
-@app.get("/docs", include_in_schema=False)
-async def docs_health_compat():
-    """Stare deploye Railway często mają healthcheck na /docs — zwracamy 200."""
-    return {"status": "ok", "swagger": "/swagger-ui"}

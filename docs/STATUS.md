@@ -47,7 +47,7 @@ _Ostatnia aktualizacja: lipiec 2026_
 
 ### Tracker (osobny serwis — `tracker/`)
 
-Skrypt JS + microservice (Railway) zbierający eventy z frontend sklepu (page_view, add_to_cart, purchase, checkout steps). Dane trafiają do tabel trackera i są widoczne w zakładce Koszyk.
+Skrypt JS + microservice zbierający eventy z frontend sklepu (page_view, add_to_cart, purchase, checkout steps). Dane trafiają do tabel trackera i są widoczne w zakładce Koszyk.
 
 ---
 
@@ -101,7 +101,7 @@ analytics-embed/        React dashboard (Vite + Tailwind + Recharts)
     api.ts              klient HTTP do backendu
     App.tsx             routing + sidebar
 
-tracker/                Tracker microservice (Railway)
+tracker/                Tracker microservice
   tracker.js            skrypt JS dla sklepu
   app/                  FastAPI event receiver
 
