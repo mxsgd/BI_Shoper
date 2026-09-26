@@ -326,6 +326,14 @@ class TransformService:
                 order_date       = EXCLUDED.order_date
         """)
         result = await self.db.execute(sql)
+        # RAW lines are replaced on re-sync (new ids); an upsert alone leaves the old
+        # lines behind and double-counts them in product/category revenue.
+        await self.db.execute(text("""
+            DELETE FROM fact_order_items f
+            WHERE NOT EXISTS (
+                SELECT 1 FROM raw_order_items r WHERE r.order_item_id = f.order_item_id
+            )
+        """))
         await self.db.commit()
         return result.rowcount
 
