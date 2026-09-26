@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -13,6 +14,14 @@ TEST_SECRET = "test-secret"
 TEST_CIPHER_KEY = Fernet.generate_key().decode()
 
 # Environment must be prepared BEFORE app settings are instantiated anywhere.
+# DATABASE_URL is required by Settings. Fall back to a dummy (lazy engine, never connects) only when
+# neither the environment nor backend/.env provides one - an env var would otherwise beat the .env file.
+_env_file = Path(__file__).resolve().parents[1] / ".env"
+_env_has_url = _env_file.exists() and any(
+    line.startswith("DATABASE_URL=") for line in _env_file.read_text(encoding="utf-8").splitlines()
+)
+if not _env_has_url:
+    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:CHANGE_ME@localhost:5432/bi_shoper")
 os.environ["SHOPER_APPSTORE_ENABLED"] = "1"
 os.environ["SHOPER_APP_ID"] = TEST_APP_ID
 os.environ["SHOPER_APP_SECRET"] = TEST_SECRET

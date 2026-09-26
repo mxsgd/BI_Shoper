@@ -132,7 +132,9 @@ def test_app_and_services_import():
 def test_all_expected_routes_registered():
     from app.main import app
 
-    paths = {route.path for route in app.routes}
+    # OpenAPI paths are stable across FastAPI versions; newer releases wrap included routers in
+    # objects that have no .path, which broke iterating app.routes.
+    paths = set(app.openapi()["paths"])
     expected = {
         "/api/shoper/app-store/event",
         "/api/shoper/app/entry",

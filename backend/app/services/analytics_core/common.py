@@ -50,3 +50,11 @@ def date_bucket_series_sql(group_by: Literal["day", "week", "month"]) -> str:
 
 def _safe_table_exists_sql(table: str) -> str:
     return f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{table}')"
+
+def tracker_since_ms(days: int) -> int:
+    """Cutoff for tracker_events_local.timestamp, which stores epoch *milliseconds*
+    (tracker.js sends Date.now()). Comparing against epoch seconds made every
+    period filter match all rows."""
+    from datetime import datetime, timedelta, timezone
+
+    return int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)

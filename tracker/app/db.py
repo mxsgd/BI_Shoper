@@ -12,8 +12,10 @@ CONNECT_TIMEOUT_SECONDS = 5
 
 
 def _build_url() -> str:
-    url = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:2402@localhost:5432/bi_shoper")
-    # Railway gives postgresql:// — asyncpg needs postgresql+asyncpg://
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set (e.g. postgresql+asyncpg://postgres:CHANGE_ME@localhost:5432/bi_shoper)")
+    # Hosted Postgres providers hand out postgresql:// — asyncpg needs postgresql+asyncpg://
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url

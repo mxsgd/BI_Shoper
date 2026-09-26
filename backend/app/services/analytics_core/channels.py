@@ -25,7 +25,7 @@ class ChannelsService:
             WITH buckets AS (SELECT bucket::date AS bucket FROM {bucket_from})
             SELECT
                 bu.bucket,
-                agg.source_channel AS channel,
+                agg.source_channel AS source_channel,
                 COALESCE(agg.orders, 0) AS orders,
                 COALESCE(agg.revenue, 0) AS revenue
             FROM buckets bu

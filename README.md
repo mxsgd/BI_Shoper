@@ -38,31 +38,25 @@ Implemented:
 - Tracker/event pipeline groundwork
 - APScheduler-based background jobs
 - CSV bulk price update workflow with validation, progress tracking, logs, and exports
+- Deterministic synthetic demo dataset and SQL data-quality checks
+- CI for backend and frontend, plus a static GitHub Pages demo
 
 In progress:
 
 - Partner API OAuth installation flow
 - Alembic-based migration workflow
 - Docker Compose local environment
-- Demo dataset for portfolio review
-- CI pipeline for backend and frontend checks
 - Production deployment documentation
-  
-## Panel Preview
 
-Embedded analytics panel for Shoper store admins — React dashboard inside the Shoper admin iframe:
+## Live Demo
 
-| Dashboard | Orders |
-| :---: | :---: |
-| ![Dashboard — KPI overview and revenue trends](docs/DashboardScreen.png) | ![Orders — revenue, status and category breakdown](docs/ZamowieniaScreen.png) |
-
-| Customers | Traffic |
-| :---: | :---: |
-| ![Customers — segments and top buyers](docs/KlienciScreen.png) | ![Traffic — GA4 funnel and sessions vs orders](docs/RuchScreen.png) |
-
-| Trends | Price updates |
-| :---: | :---: |
-| ![Trends — seasonality and weekday patterns](docs/TrendyScreen.png) | ![Price updates — CSV bulk update with live progress](docs/AktualizacjaCenScreen.png) |
+**https://mxsgd.github.io/BI_Shoper/** - the real React panel running on a frozen snapshot of a synthetic store.
+There is no backend behind it: period filters, grouping and click-a-day focus all work, but they read pre-generated
+JSON files instead of calling an API, and the write features (price updates, variant codes, settings) are left out.
+The site is rebuilt from scratch on every push to `main` by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml): seed the store into a throwaway Postgres, freeze every
+API response the UI can request (`python -m app.demo.snapshot`, ~1,500 files), build the frontend with
+`npm run build:demo`, deploy.
 
 ## What It Does
 
@@ -182,12 +176,43 @@ From the repo root, you can use:
 
 This starts the backend in a separate PowerShell window and then runs the frontend.
 
+## Demo Data and Data Quality
+
+You do not need a Shoper store or a GA4 property to try the project. A deterministic synthetic store
+(orders, customers, products, GA4 reports and tracker events) can be loaded into a **separate, disposable**
+database and pushed through the real RAW -> CORE pipeline:
+
+```bash
+cd backend
+python -m app.demo                    # seeds <your database>_demo using the credentials in DATABASE_URL
+DATABASE_URL=postgresql+asyncpg://postgres:<password>@localhost:5432/bi_shoper_demo uvicorn app.main:app --port 8010
+```
+
+The seeder refuses to touch any database whose name does not end in `_demo` or `_test`. The same seed always
+produces identical data (`--seed`, `--days`, `--as-of`), and it is generated from one causal chain
+(sessions -> orders -> order lines -> GA4 funnel -> tracker events), so cross-source numbers reconcile like they
+would for a correctly instrumented store.
+
+Data-quality rules live in [`backend/app/quality/checks.py`](backend/app/quality/checks.py) as plain SQL: keys,
+referential integrity, value validity, RAW-vs-CORE reconciliation, GA4-vs-orders reconciliation and freshness.
+
+```bash
+python -m app.quality                                   # run all checks against DATABASE_URL (exit 1 on failure)
+python -m app.quality --database-url <postgres url>     # ...or any other database
+python -m pytest                                        # the suite seeds a test database and runs every check
+```
+
+The checks target failure modes typical of sync-and-transform pipelines: source rows replaced on re-sync while the
+warehouse keeps stale copies, unit mismatches between systems (epoch seconds vs milliseconds), and tracking that
+silently undercounts (GA4 or tracker purchases vs real orders). Reconciliation tolerances are explicit per check, so
+running the same suite against a live store doubles as a health report.
+
 ## Environment Configuration
 
 Create `backend/.env` and add the values you need. Minimal example:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://postgres:2402@localhost:5432/bi_shoper
+DATABASE_URL=postgresql+asyncpg://postgres:CHANGE_ME@localhost:5432/bi_shoper
 
 GA4_PROPERTY_ID=
 GA4_CREDENTIALS_PATH=
