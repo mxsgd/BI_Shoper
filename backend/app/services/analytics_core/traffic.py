@@ -42,7 +42,7 @@ class TrafficService:
         if focus_date is not None:
             overview_sql = text("""
                 SELECT
-                    COALESCE(SUM(session), 0)       AS sessions,
+                    COALESCE(SUM(sessions), 0)      AS sessions,
                     COALESCE(SUM(total_users), 0)   AS users,
                     COALESCE(SUM(new_users), 0)     AS new_users,
                     ROUND(AVG(bounce_rate)::numeric, 4) AS bounce_rate,
