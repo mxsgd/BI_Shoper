@@ -3,16 +3,20 @@ Skrypt do utworzenia bazy danych bi_shoper w PostgreSQL.
 Uruchom: python scripts/create_database.py
 """
 import sys
+sys.path.insert(0, ".")
+from sqlalchemy.engine import make_url
+from app.config import get_settings
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import ProgrammingError
 
 # Parametry połączenia (bez nazwy bazy, bo łączymy się do 'postgres')
+_url = make_url(get_settings().sync_db_url)
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "user": "postgres",
-    "password": "2402",
-    "database": "postgres"  # Łączymy się do domyślnej bazy 'postgres'
+    "host": _url.host,
+    "port": _url.port or 5432,
+    "user": _url.username,
+    "password": _url.password,
+    "database": "postgres"  # connect to the default db to CREATE DATABASE,
 }
 
 DB_NAME = "bi_shoper"
@@ -50,7 +54,7 @@ def create_database():
         print(f"❌ Błąd: {e}")
         print("\n💡 Sprawdź czy:")
         print("   1. PostgreSQL jest uruchomiony")
-        print("   2. Hasło jest poprawne (2402)")
+        print("   2. Hasło w DATABASE_URL (backend/.env) jest poprawne")
         print("   3. Port jest poprawny (5432)")
         return False
 

@@ -1,10 +1,11 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://postgres:2402@localhost:5432/bi_shoper"
+    database_url: str  # required: set DATABASE_URL in backend/.env (see .env.example)
     sync_database_url: str = ""
 
     ga4_property_id: str = ""
@@ -70,7 +71,7 @@ class Settings(BaseSettings):
         return missing
 
     class Config:
-        env_file = ".env"
+        env_file = str(Path(__file__).resolve().parents[1] / ".env")  # backend/.env, whatever the cwd
         extra = "ignore"
 
 

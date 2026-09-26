@@ -1,7 +1,11 @@
 """Deep-dive data quality checks."""
+import sys
 from sqlalchemy import create_engine, text
 
-DB_URL = "postgresql://postgres:2402@localhost:5432/bi_shoper"
+sys.path.insert(0, ".")
+from app.config import get_settings
+
+DB_URL = get_settings().sync_db_url
 
 
 def run():

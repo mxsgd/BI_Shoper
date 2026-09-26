@@ -3,14 +3,18 @@ Skrypt do podglądu bazy danych bi_shoper przez SQL.
 Uruchom: python scripts/view_database.py
 """
 import sys
+sys.path.insert(0, ".")
+from sqlalchemy.engine import make_url
+from app.config import get_settings
 from sqlalchemy import create_engine, text, inspect
 
+_url = make_url(get_settings().sync_db_url)
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "user": "postgres",
-    "password": "2402",
-    "database": "bi_shoper"
+    "host": _url.host,
+    "port": _url.port or 5432,
+    "user": _url.username,
+    "password": _url.password,
+    "database": _url.database,
 }
 
 
@@ -63,7 +67,7 @@ def view_database():
         print("\n💡 Sprawdź czy:")
         print("   1. Baza 'bi_shoper' istnieje (utwórz w pgAdmin: prawy klik Databases → Create → Database, nazwa: bi_shoper)")
         print("   2. PostgreSQL jest uruchomiony")
-        print("   3. Hasło jest poprawne (2402)")
+        print("   3. Hasło w DATABASE_URL (backend/.env) jest poprawne")
         return False
 
 

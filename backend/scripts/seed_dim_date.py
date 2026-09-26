@@ -3,6 +3,9 @@ Skrypt do wypełnienia dim_date (wymiar czasu) dla analiz sezonowości i trendó
 Uruchom: python scripts/seed_dim_date.py
 """
 import sys
+sys.path.insert(0, ".")
+from sqlalchemy.engine import make_url
+from app.config import get_settings
 from datetime import datetime, date, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -12,12 +15,13 @@ sys.path.insert(0, ".")
 from app.models.core.dim_date import DimDate
 from app.database import Base
 
+_url = make_url(get_settings().sync_db_url)
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "user": "postgres",
-    "password": "2402",
-    "database": "bi_shoper"
+    "host": _url.host,
+    "port": _url.port or 5432,
+    "user": _url.username,
+    "password": _url.password,
+    "database": _url.database,
 }
 
 
