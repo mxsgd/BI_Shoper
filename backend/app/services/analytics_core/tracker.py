@@ -1,8 +1,8 @@
-from datetime import date, timedelta, datetime
+from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .common import _safe_table_exists_sql
+from .common import _safe_table_exists_sql, tracker_since_ms
 
 class TrackerService:
     def __init__(self, db: AsyncSession):
@@ -13,10 +13,8 @@ class TrackerService:
             store_id: int,
             period: int,) -> dict:
 
-            # Zakładamy, że timestamp to Unix epoch w sekundach.
-            now = datetime.utcnow()
-            since_dt = now - timedelta(days=period)
-            since_epoch = int(since_dt.timestamp())
+            since_epoch = tracker_since_ms(period)
+            since_dt = datetime.fromtimestamp(since_epoch / 1000, tz=timezone.utc)
         
             exists_sql = text(_safe_table_exists_sql("tracker_events_local"))
             if not (await self.db.execute(exists_sql)).scalar():
@@ -24,7 +22,7 @@ class TrackerService:
                     "period_days": period,
                     "total_events": 0,
                     "distinct_users": 0,
-                    "since_iso": since_dt.isoformat() + "Z",
+                    "since_iso": since_dt.isoformat().replace("+00:00", "Z"),
                     "by_event": [],
                     "top_urls": [],
                 }
@@ -66,7 +64,7 @@ class TrackerService:
                 "period_days": period,
                 "total_events": total_events,
                 "distinct_users": distinct_users,
-                "since_iso": since_dt.isoformat() + "Z",
+                "since_iso": since_dt.isoformat().replace("+00:00", "Z"),
                 "by_event": [
                     {"event_name": r.event_name, "count": int(r.cnt)}
                     for r in by_event_rows

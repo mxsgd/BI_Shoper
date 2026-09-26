@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .common import _safe_table_exists_sql
+from .common import _safe_table_exists_sql, tracker_since_ms
 
 class CartService:
     def __init__(self, db: AsyncSession):
@@ -33,8 +33,7 @@ class CartService:
     
         # ── Tracker-based funnel (preferred over GA4 when available) ──
         if has_tracker:
-            now = datetime.utcnow()
-            since_epoch = int((now - timedelta(days=period)).timestamp())
+            since_epoch = tracker_since_ms(period)
             tracker_count = (await self.db.execute(text("""
                 SELECT COUNT(*)
                 FROM tracker_events_local
