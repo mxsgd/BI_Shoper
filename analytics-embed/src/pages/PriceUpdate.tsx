@@ -197,11 +197,12 @@ export default function PriceUpdate() {
   // Postęp — tylko lekki endpoint job (bez logów)
   useEffect(() => {
     if (!jobId || isJobTerminal) return;
+    const id = jobId;
     let alive = true;
 
     async function refreshJob() {
       try {
-        const nextJob = await api.getPriceUpdateJob(jobId);
+        const nextJob = await api.getPriceUpdateJob(id);
         if (alive) setJob(nextJob);
       } catch {
         /* retry */
@@ -219,6 +220,7 @@ export default function PriceUpdate() {
   // Logi — osobno; podczas RUNNING tylko ostatnie wpisy (tail)
   useEffect(() => {
     if (!jobId) return;
+    const id = jobId;
     let alive = true;
 
     async function refreshLogs() {
@@ -226,7 +228,7 @@ export default function PriceUpdate() {
         const params = jobRunning
           ? { ...fetchLogsParams, tail: 200, page: 1 }
           : fetchLogsParams;
-        const nextLogs = await api.getPriceUpdateLogs(jobId, params);
+        const nextLogs = await api.getPriceUpdateLogs(id, params);
         if (alive) setLogs(nextLogs);
       } catch {
         /* retry */
