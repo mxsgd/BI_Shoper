@@ -1,0 +1,22 @@
+# WHICH database to talk to. Kept separate from dbt_project.yml (WHAT to build) so the same
+# models run unchanged on any machine - only this file differs per environment.
+#
+# Every value comes from an env var, and the password has no default, so this file itself
+# never contains a secret and is safe to commit. DBT_DBNAME defaults to the disposable demo
+# database, so running `dbt run` with nothing but a password set can never touch the real store.
+#
+# Usage:
+#   export DBT_PASSWORD=...            # required, no default on purpose
+#   dbt run --profiles-dir .           # from the dbt/ directory
+bi_shoper:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST', 'localhost') }}"
+      port: "{{ env_var('DBT_PORT', '5432') | as_number }}"
+      user: "{{ env_var('DBT_USER', 'postgres') }}"
+      password: "{{ env_var('DBT_PASSWORD') }}"
+      dbname: "{{ env_var('DBT_DBNAME', 'bi_shoper_demo') }}"
+      schema: public
+      threads: 4
