@@ -5,13 +5,14 @@ from sqlalchemy import select, func
 from ..database import get_db
 from ..models.product import Product
 from ..services.analytics import AnalyticsService
+from .access import current_store_id
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
 
 @router.get("/")
 async def list_products(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -40,7 +41,7 @@ async def list_products(
 
 @router.get("/bestsellers")
 async def bestsellers(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):

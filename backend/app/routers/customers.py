@@ -4,13 +4,14 @@ from sqlalchemy import select, func
 
 from ..database import get_db
 from ..models.customer import Customer
+from .access import current_store_id
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
 
 
 @router.get("/")
 async def list_customers(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),

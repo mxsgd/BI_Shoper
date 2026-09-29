@@ -47,6 +47,12 @@ async def lifespan(app: FastAPI):
             "Shoper App Store integration is enabled but required settings are "
             f"missing: {', '.join(missing)}"
         )
+    dev_store = get_settings().dev_store_id
+    if dev_store:
+        logging.getLogger(__name__).warning(
+            "DEV_STORE_ID=%s: requests from this machine without an app session act as store %s "
+            "and may use admin endpoints. Development only - unset it on any deployed server.",
+            dev_store, dev_store)
     # The schema belongs to Alembic (deploys run `alembic upgrade head` first); refuse to run on
     # anything older than the code expects.
     async with engine.connect() as conn:

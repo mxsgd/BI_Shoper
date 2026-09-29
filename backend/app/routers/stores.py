@@ -12,8 +12,12 @@ from ..models.store import Store
 from ..scheduler.jobs import get_sync_status, run_sync_now
 from ..services.shoper_access import store_auth_mode
 from ..services.shoper_auth import has_store_credentials
+from .access import check_store, current_store_id, require_admin
 
 router = APIRouter(prefix="/api/stores", tags=["stores"])
+# Listing, creating, re-crediting and deleting stores is operator work (X-Admin-Token); a merchant's
+# panel only ever syncs and watches its own store.
+admin = [Depends(require_admin)]
 
 
 class StoreCreate(BaseModel):
@@ -45,11 +49,11 @@ class StoreAuthUpdate(BaseModel):
 class SyncNowBody(BaseModel):
     """Trigger the same sync logic as the background scheduler."""
 
-    store_id: int | None = None
+    store_id: int | None = None  # optional; must match the app session when sent
     scope: Literal["all", "quick", "orders", "products", "customers", "reference", "transform", "ga4"] = "quick"
 
 
-@router.get("/")
+@router.get("/", dependencies=admin)
 async def list_stores(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Store).order_by(Store.name))
     stores = result.scalars().all()
@@ -72,7 +76,7 @@ async def list_stores(db: AsyncSession = Depends(get_db)):
     return out
 
 
-@router.post("/")
+@router.post("/", dependencies=admin)
 async def create_store(body: StoreCreate, db: AsyncSession = Depends(get_db)):
     # DEPRECATED: manual store creation with WebAPI credentials.
     # New shops should install the app through the Shoper App Store.
@@ -94,7 +98,7 @@ async def create_store(body: StoreCreate, db: AsyncSession = Depends(get_db)):
     return {"id": store.id, "name": store.name}
 
 
-@router.patch("/{store_id}/auth")
+@router.patch("/{store_id}/auth", dependencies=admin)
 async def update_store_auth(store_id: int, body: StoreAuthUpdate, db: AsyncSession = Depends(get_db)):
     # DEPRECATED legacy path - gated behind an explicit env flag.
     if (body.api_login or body.api_password) and not get_settings().shoper_enable_legacy_webapi:
@@ -127,7 +131,12 @@ async def update_store_auth(store_id: int, body: StoreAuthUpdate, db: AsyncSessi
 
 
 @router.get("/{store_id}/sync-status")
-async def store_sync_status(store_id: int, db: AsyncSession = Depends(get_db)):
+async def store_sync_status(
+    store_id: int,
+    session_store_id: int = Depends(current_store_id),
+    db: AsyncSession = Depends(get_db),
+):
+    check_store(store_id, session_store_id)
     result = await db.execute(select(Store).where(Store.id == store_id))
     store = result.scalar_one_or_none()
     if not store:
@@ -138,29 +147,31 @@ async def store_sync_status(store_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/sync-now")
 async def sync_now(
     body: SyncNowBody = SyncNowBody(),
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Kick off sync in the background and return immediately.
+    Kick off sync of the session's store in the background and return immediately.
     The client can poll /sync-status to track progress.
     """
-    if body.store_id is not None:
-        res = await db.execute(select(Store).where(Store.id == body.store_id))
-        store = res.scalar_one_or_none()
-        if not store:
-            raise HTTPException(status_code=404, detail="Store not found")
-        if not store.is_active:
-            raise HTTPException(status_code=400, detail="Store is inactive")
+    # No store_id used to mean "every store"; a session only ever syncs its own.
+    check_store(body.store_id, store_id)
+    res = await db.execute(select(Store).where(Store.id == store_id))
+    store = res.scalar_one_or_none()
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    if not store.is_active:
+        raise HTTPException(status_code=400, detail="Store is inactive")
 
-    status = get_sync_status(body.store_id)
+    status = get_sync_status(store_id)
     if status.get("status") == "running":
         return {"already_running": True, **status}
 
-    asyncio.create_task(run_sync_now(store_id=body.store_id, scope=body.scope))
-    return {"started": True, "store_id": body.store_id, "scope": body.scope}
+    asyncio.create_task(run_sync_now(store_id=store_id, scope=body.scope))
+    return {"started": True, "store_id": store_id, "scope": body.scope}
 
 
-@router.delete("/{store_id}")
+@router.delete("/{store_id}", dependencies=admin)
 async def delete_store(store_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Store).where(Store.id == store_id))
     store = result.scalar_one_or_none()

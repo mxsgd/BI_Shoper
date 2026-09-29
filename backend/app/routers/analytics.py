@@ -29,6 +29,7 @@ from ..services.analytics_core.channels import ChannelsService
 from ..services.analytics_core.traffic import TrafficService
 from ..services.analytics_core.cart import CartService
 from ..services.analytics_core.tracker import TrackerService
+from .access import current_store_id
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -38,7 +39,7 @@ router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 # ──────────────────────────────────────────────────────────────────
 @router.get("/overview")
 async def overview(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(30, ge=1, le=365),
     focus_date: Optional[date] = Query(None, description="Single day; KPIs for this day vs previous day"),
     db: AsyncSession = Depends(get_db),
@@ -60,7 +61,7 @@ async def overview(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/revenue")
 async def revenue(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(30, ge=1, le=365),
     group_by: Literal["day", "week", "month"] = Query("day"),
     focus_date: Optional[date] = Query(None, description="Scope by_status/by_channel/by_category to this day"),
@@ -82,7 +83,7 @@ async def revenue(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/top-products")
 async def top_products(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(90, ge=1, le=365),
     limit: int = Query(20, ge=1, le=100),
     sort_by: Literal["revenue", "quantity"] = Query("revenue"),
@@ -100,7 +101,7 @@ async def top_products(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/customers")
 async def customers_analytics(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(90, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ):
@@ -116,7 +117,7 @@ async def customers_analytics(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/trends")
 async def trends(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(365, ge=30, le=730),
     db: AsyncSession = Depends(get_db),
 ):
@@ -132,7 +133,7 @@ async def trends(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/cohorts")
 async def cohorts(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     months: int = Query(12, ge=3, le=24),
     db: AsyncSession = Depends(get_db),
 ):
@@ -148,7 +149,7 @@ async def cohorts(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/rfm")
 async def rfm_analysis(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -163,7 +164,7 @@ async def rfm_analysis(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/channels")
 async def channels(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(90, ge=1, le=365),
     group_by: Literal["day", "week", "month"] = Query("month"),
     db: AsyncSession = Depends(get_db),
@@ -180,7 +181,7 @@ async def channels(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/traffic")
 async def traffic(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(30, ge=1, le=365),
     focus_date: Optional[date] = Query(None, description="KPIs/tables for this day only; time_series unchanged"),
     db: AsyncSession = Depends(get_db),
@@ -200,7 +201,7 @@ async def traffic(
 
 @router.get("/cart")
 async def cart_analysis(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ):
@@ -217,7 +218,7 @@ async def cart_analysis(
 # ──────────────────────────────────────────────────────────────────
 @router.get("/tracker")
 async def tracker_events_summary(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(7, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
 ):

@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 TEST_APP_ID = "test-app-id"
 TEST_SECRET = "test-secret"
 TEST_CIPHER_KEY = Fernet.generate_key().decode()
+TEST_ADMIN_TOKEN = "test-admin-token"
 
 # Environment must be prepared BEFORE app settings are instantiated anywhere.
 # DATABASE_URL is required by Settings. Fall back to a dummy (lazy engine, never connects) only when
@@ -28,6 +29,7 @@ os.environ["SHOPER_APP_SECRET"] = TEST_SECRET
 os.environ["SHOPER_TOKEN_CIPHER_KEY"] = TEST_CIPHER_KEY
 os.environ["SHOPER_ENABLE_LEGACY_WEBAPI"] = "0"
 os.environ["SHOPER_ALLOW_INSECURE_SHOP_URL"] = "0"
+os.environ["ADMIN_API_TOKEN"] = TEST_ADMIN_TOKEN
 
 from app.config import get_settings  # noqa: E402
 

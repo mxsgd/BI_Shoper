@@ -18,6 +18,7 @@ from app.services.shoper_access import (
     store_auth_mode,
 )
 from app.services.shoper_partner_auth import ShoperPartnerAuthService
+from tests.conftest import TEST_ADMIN_TOKEN
 from tests.test_partner_auth import SHOP_URL, TOKEN_URL, token_response
 
 
@@ -176,7 +177,7 @@ async def test_stores_endpoint_returns_no_secrets(session_maker, monkeypatch):
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-        resp = await client.get("/api/stores/")
+        resp = await client.get("/api/stores/", headers={"X-Admin-Token": TEST_ADMIN_TOKEN})
     assert resp.status_code == 200
     body = resp.text
     assert "secret-login" not in body
@@ -209,5 +210,6 @@ async def test_stores_patch_rejects_legacy_credentials_when_disabled(session_mak
         resp = await client.patch(
             f"/api/stores/{store.id}/auth",
             json={"api_login": "u", "api_password": "p"},
+            headers={"X-Admin-Token": TEST_ADMIN_TOKEN},
         )
     assert resp.status_code == 400

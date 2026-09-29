@@ -3,10 +3,11 @@ import io
 import re
 from typing import Literal
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from ..services.price_update import price_update_jobs
+from .access import current_store_id, ensure_owned
 
 router = APIRouter(prefix="/api/price-update", tags=["price-update"])
 
@@ -227,7 +228,7 @@ def _job_response(job) -> dict:
 @router.post("/jobs")
 async def create_price_update_job(
     file: UploadFile = File(...),
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     duplicate_mode: Literal["error", "last_wins"] = Query("error"),
     target_mode: Literal["product", "variant"] = Query("product"),
     csv_delimiter: Literal["comma", "semicolon", "tab", "pipe"] = Query("semicolon"),
@@ -282,7 +283,7 @@ async def create_price_update_job(
 
 
 @router.get("/jobs/latest")
-async def get_latest_price_update_job(store_id: int = Query(...)):
+async def get_latest_price_update_job(store_id: int = Depends(current_store_id)):
     """Ostatni job sklepu (dowolny status) — przywracanie po restarcie backendu."""
     job = await price_update_jobs.get_latest_job(store_id)
     if job is None:
@@ -291,7 +292,7 @@ async def get_latest_price_update_job(store_id: int = Query(...)):
 
 
 @router.get("/jobs/active")
-async def get_active_price_update_job(store_id: int = Query(...)):
+async def get_active_price_update_job(store_id: int = Depends(current_store_id)):
     """Bieżący RUNNING/PENDING job dla sklepu — fallback gdy UI straci localStorage."""
     job = await price_update_jobs.get_active_job(store_id)
     if job is None:
@@ -299,16 +300,23 @@ async def get_active_price_update_job(store_id: int = Query(...)):
     return {"job": _job_response(job)}
 
 
-@router.get("/jobs/{job_id}")
-async def get_price_update_job(job_id: str):
+async def _owned_job(job_id: str, store_id: int):
+    """The job, if it exists and belongs to the caller's store; 404 otherwise."""
     job = await price_update_jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _job_response(job)
+    ensure_owned(job.store_id, store_id)
+    return job
+
+
+@router.get("/jobs/{job_id}")
+async def get_price_update_job(job_id: str, store_id: int = Depends(current_store_id)):
+    return _job_response(await _owned_job(job_id, store_id))
 
 
 @router.post("/jobs/{job_id}/cancel")
-async def cancel_price_update_job(job_id: str):
+async def cancel_price_update_job(job_id: str, store_id: int = Depends(current_store_id)):
+    await _owned_job(job_id, store_id)
     job = await price_update_jobs.cancel_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -323,11 +331,10 @@ async def get_price_update_logs(
     page: int = Query(1, ge=1),
     per_page: int = Query(100, ge=1, le=500),
     tail: int | None = Query(None, ge=1, le=500),
+    store_id: int = Depends(current_store_id),
 ):
     """Logi joba. ``tail=N`` — tylko ostatnie N wpisów (lekki polling podczas RUNNING)."""
-    job = await price_update_jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+    job = await _owned_job(job_id, store_id)
 
     items, total, pages, logs_dropped = await price_update_jobs.get_logs(
         job_id,
@@ -350,10 +357,8 @@ async def get_price_update_logs(
 
 
 @router.get("/jobs/{job_id}/logs/export.csv")
-async def export_price_update_logs(job_id: str):
-    job = await price_update_jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
+async def export_price_update_logs(job_id: str, store_id: int = Depends(current_store_id)):
+    job = await _owned_job(job_id, store_id)
 
     from ..services import price_update_persistence as persist
 

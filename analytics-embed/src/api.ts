@@ -19,15 +19,10 @@ export async function loadSession(): Promise<AppSession> {
     session = { store_id: 0, shop: null };
     return session;
   }
+  // Outside the Shoper iframe (local development) the backend answers with DEV_STORE_ID instead.
   const res = await fetch(`${BASE}/shoper/app/session`, { credentials: "include" });
   if (res.ok) {
     session = (await res.json()) as AppSession;
-    return session;
-  }
-  // Local development outside the Shoper iframe has no session cookie; allow an explicit opt-in store.
-  const devStore = import.meta.env.DEV ? Number(import.meta.env.VITE_DEV_STORE_ID) : NaN;
-  if (res.status === 401 && Number.isInteger(devStore) && devStore > 0) {
-    session = { store_id: devStore, shop: null };
     return session;
   }
   throw new NoSessionError(res.status === 401 ? "no-session" : `${res.status} ${res.statusText}`);

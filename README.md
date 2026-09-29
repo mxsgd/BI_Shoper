@@ -167,9 +167,11 @@ npm install
 npm run dev
 ```
 
-Inside Shoper the panel gets its store from the signed session cookie (`GET /api/shoper/app/session`).
-Outside the iframe there is no session, so `npm run dev` falls back to `VITE_DEV_STORE_ID` from
-`analytics-embed/.env.development`. Production builds ignore it and show a "no session" screen instead.
+The backend takes the store for every request from the signed session cookie that the Shoper admin
+sets when it opens the app; a `store_id` sent by the client must match it. Outside the iframe there is
+no session, so for local development set `DEV_STORE_ID=1` in `backend/.env`: requests from your own
+machine then act as that store. It is ignored for requests from anywhere else, but never set it on a
+deployed server. Store management and GA4 settings need `ADMIN_API_TOKEN` (header `X-Admin-Token`).
 
 ### 3. Convenience script
 

@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     # installation. Will be removed once all stores are migrated.
     shoper_enable_legacy_webapi: bool = False
 
+    # ------------------------------------------------------------------
+    # Request access (app/routers/access.py)
+    # ------------------------------------------------------------------
+    # Development only: requests from this machine (127.0.0.1 / ::1) without an app session act
+    # as this store and may use the admin endpoints. Never set it on a deployed server.
+    dev_store_id: int | None = None
+    # Admin endpoints (store management, GA4 settings) require the X-Admin-Token header to match
+    # this value. Empty = admin endpoints are closed to everyone except the local dev fallback.
+    admin_api_token: str = ""
+
     @property
     def sync_db_url(self) -> str:
         """Sync URL for Alembic and scripts (psycopg2 driver)."""
