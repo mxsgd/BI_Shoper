@@ -12,7 +12,9 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.engine import Connection
+
+from .config import as_sync_url
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -22,11 +24,7 @@ def alembic_config(database_url: str | None = None) -> Config:
     cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
     cfg.attributes["configure_logging"] = False
     if database_url:
-        # Migrations run on the sync driver; accept the app's asyncpg URL too.
-        url = make_url(database_url)
-        if url.drivername == "postgresql+asyncpg":
-            url = url.set(drivername="postgresql+psycopg2")
-        cfg.attributes["db_url"] = url.render_as_string(hide_password=False)
+        cfg.attributes["db_url"] = as_sync_url(database_url)
     return cfg
 
 

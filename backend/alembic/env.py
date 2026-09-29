@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from app.config import get_settings
+from app.config import as_sync_url, get_settings
 from app.database import Base
 import app.models  # noqa: F401 - register all models on Base.metadata
 
@@ -18,7 +18,7 @@ if config.config_file_name is not None and config.attributes.get("configure_logg
 # command line, then the app settings (.env). Kept out of config.set_main_option because that goes
 # through configparser, which chokes on a "%" in the password.
 x_args = context.get_x_argument(as_dictionary=True)
-db_url = config.attributes.get("db_url") or x_args.get("db_url") or get_settings().sync_db_url
+db_url = as_sync_url(config.attributes.get("db_url") or x_args.get("db_url") or get_settings().sync_db_url)
 
 target_metadata = Base.metadata
 
