@@ -40,11 +40,12 @@ Implemented:
 - CSV bulk price update workflow with validation, progress tracking, logs, and exports
 - Deterministic synthetic demo dataset and SQL data-quality checks
 - CI for backend and frontend, plus a static GitHub Pages demo
+- Alembic migrations as the only source of schema changes, checked against the models in CI
+- Multi-store CORE layer: every table is keyed by (store, Shoper id), since each shop numbers from 1
 
 In progress:
 
 - Partner API OAuth installation flow
-- Alembic-based migration workflow
 - Docker Compose local environment
 - Production deployment documentation
 
@@ -142,6 +143,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
+python -m alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -255,7 +257,6 @@ Implemented:
 
 Still in progress:
 - Full Partner API OAuth installation flow
-- Formal migration workflow with Alembic
 - Better deployment and production setup documentation
 
 ## Why This Project Is Interesting

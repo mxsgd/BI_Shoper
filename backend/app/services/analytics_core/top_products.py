@@ -39,11 +39,11 @@ class TopProductsService:
                     COUNT(DISTINCT foi.order_id) AS order_count
                 FROM fact_order_items foi
                 JOIN fact_orders fo
-                    ON fo.order_id = foi.order_id
+                    ON fo.store_id = foi.store_id AND fo.order_id = foi.order_id
                 LEFT JOIN dim_products dp
-                    ON dp.product_id = foi.product_id
+                    ON dp.store_id = foi.store_id AND dp.product_id = foi.product_id
                 LEFT JOIN dim_categories dc
-                    ON dc.category_id = foi.category_id
+                    ON dc.store_id = foi.store_id AND dc.category_id = foi.category_id
                 WHERE fo.store_id = :store_id
                     AND fo.order_date::date >= :since
                 GROUP BY foi.product_id, dp.product_name, dc.category_name

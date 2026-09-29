@@ -32,6 +32,17 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - run: pip install -r requirements.txt -r requirements-dev.txt
+      # Fresh database: every migration runs up and down, and the models must match the migrations
+      # exactly (a model changed without a migration fails `alembic check`).
+      - name: Migrations
+        env:
+          MIGRATIONS_DB: postgresql://postgres:postgres@localhost:5432/bi_shoper_migrations
+        run: |
+          PGPASSWORD=postgres createdb -h localhost -U postgres bi_shoper_migrations
+          python -m alembic -x db_url=$MIGRATIONS_DB upgrade head
+          python -m alembic -x db_url=$MIGRATIONS_DB check
+          python -m alembic -x db_url=$MIGRATIONS_DB downgrade base
+          python -m alembic -x db_url=$MIGRATIONS_DB upgrade head
       - run: python -m pytest -q
 
   frontend:
