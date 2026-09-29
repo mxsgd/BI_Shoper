@@ -123,9 +123,8 @@ graph TD
 backend/            FastAPI app, sync services, analytics routes, DB models
 analytics-embed/    React dashboard embedded in Shoper admin
 tracker/            Tracker-related code and event pipeline work
-docs/               Product notes, architecture docs, panel screenshots, and specs
-PLAN.md             High-level architecture and data model notes
-PRICE_UPDATE_PANEL_SPEC.md
+dbt/                dbt project for RAW -> CORE transforms (in progress)
+docs/               Shoper integration, API reference, and DB management notes
 ```
 
 ## Local Development
@@ -268,11 +267,9 @@ It is a good example of building a vertical product end-to-end: from third-party
 
 ## Related Docs
 
-- `PLAN.md`
-- `docs/SHOPER_PANEL_APP.md`
+- `docs/SHOPER_APPSTORE_INTEGRATION.md`
 - `docs/DB_MANAGEMENT.md`
-- `PRICE_UPDATE_PANEL_SPEC.md`
-- `docs/tracker-roadmap.md`
+- `docs/ShoperAPI-Reference.md`
 
 ## License
 
