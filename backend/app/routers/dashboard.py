@@ -3,13 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..services.analytics import AnalyticsService
+from .access import current_store_id
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 @router.get("/kpis")
 async def get_kpis(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(30, description="Number of days"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -19,7 +20,7 @@ async def get_kpis(
 
 @router.get("/revenue-chart")
 async def revenue_chart(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     period: int = Query(30),
     db: AsyncSession = Depends(get_db),
 ):

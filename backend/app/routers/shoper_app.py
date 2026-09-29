@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,11 +18,7 @@ from ..config import get_settings
 from ..database import get_db
 from ..models.shoper_app_installation import INSTALLATION_ACTIVE, ShoperAppInstallation
 from ..models.store import Store
-from ..services.security.app_session import (
-    AppSessionError,
-    create_session_token,
-    verify_session_token,
-)
+from ..services.security.app_session import create_session_token
 from ..services.security.shoper_signature import (
     InvalidSignatureError,
     MissingParameterError,
@@ -36,12 +32,12 @@ from ..services.shoper_app_events import (
     AppStoreLifecycleEvent,
     LifecycleEventError,
 )
+from .access import SESSION_COOKIE, current_session, set_session_cookie  # noqa: F401 (tests import SESSION_COOKIE from here)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/shoper", tags=["shoper-app"])
 
-SESSION_COOKIE = "bi_shoper_session"
 
 
 def _validator() -> ShoperSignatureValidator:
@@ -162,30 +158,11 @@ async def app_iframe_entry(request: Request, db: AsyncSession = Depends(get_db))
     )
 
     response = RedirectResponse(url=settings.shoper_panel_redirect_url, status_code=302)
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=settings.shoper_session_ttl_seconds,
-        httponly=True,
-        secure=True,
-        samesite="none",  # required inside the Shoper admin iframe
-        path="/",
-    )
+    set_session_cookie(response, token)
     return response
 
 
-async def require_app_session(
-    session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
-) -> dict:
-    """FastAPI dependency: validated app session payload (store_id, shop)."""
-    settings = get_settings()
-    try:
-        return verify_session_token(session or "", secret=settings.session_secret)
-    except AppSessionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-
 @router.get("/app/session")
-async def app_session_info(payload: dict = Depends(require_app_session)):
+async def app_session_info(session: dict = Depends(current_session)):
     """Session context for the frontend (which store to query). No tokens."""
-    return {"store_id": payload["store_id"], "shop": payload.get("shop")}
+    return session

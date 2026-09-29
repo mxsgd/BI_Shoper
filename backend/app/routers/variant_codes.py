@@ -23,6 +23,7 @@ from ..models.store import Store
 from ..services.shoper_access import ensure_store_access_token
 from ..services.shoper_client import ShoperClient, ShoperUnauthorizedError
 from ..services.sync_service import SyncService
+from .access import check_store, current_store_id, ensure_owned
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ async def _groups_by_id(db: AsyncSession, store_id: int, group_ids: list[int] | 
 
 @router.get("/groups")
 async def list_product_groups(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     refresh: bool = Query(False, description="Pobierz nazwy zestawów z Shopera przed listowaniem"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -213,7 +214,7 @@ async def list_product_groups(
 @router.post("/groups/{group_id}/sync")
 async def sync_variant_group(
     group_id: int,
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     include_stocks: bool = Query(False, description="Sync stocks too (slow for large groups)"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -252,7 +253,7 @@ async def sync_variant_group(
 
 @router.get("/search-products")
 async def search_products(
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     q: str = Query(""),
     group_id: int | None = Query(None),
     limit: int = Query(200, ge=1, le=500),
@@ -287,7 +288,7 @@ async def search_products(
 @router.get("/products/{product_id}/stocks")
 async def get_product_stocks(
     product_id: int,
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Return all variant stocks (product-stocks) for a product from local DB."""
@@ -349,7 +350,7 @@ def _determine_role(values: list[dict]) -> str:
 @router.get("/detect-options-multi")
 async def detect_options_multi(
     product_ids: str = Query(..., description="Comma-separated product IDs"),
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -438,7 +439,7 @@ async def detect_options_multi(
 @router.get("/detect-options")
 async def detect_options(
     product_id: int = Query(...),
-    store_id: int = Query(...),
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -504,7 +505,7 @@ class OptionGroupConfig(BaseModel):
 
 
 class ApplyCodesRequest(BaseModel):
-    store_id: int
+    store_id: int | None = None  # optional; must match the app session when sent
     product_ids: list[int]
     option_groups: list[OptionGroupConfig]  # ordered: suffix order in code
     prices: dict[str, float] = {}           # variant_code -> price (from CSV)
@@ -515,15 +516,18 @@ class ApplyCodesRequest(BaseModel):
 @router.post("/apply-codes/start")
 async def apply_codes_start(
     body: ApplyCodesRequest,
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
+    check_store(body.store_id, store_id)
+    body.store_id = store_id
     if not body.product_ids:
         raise HTTPException(400, "Brak wybranych produktów")
     if not body.option_groups:
         raise HTTPException(400, "Brak zdefiniowanych grup opcji")
 
     store = (
-        await db.execute(select(Store).where(Store.id == body.store_id, Store.is_active.is_(True)))
+        await db.execute(select(Store).where(Store.id == store_id, Store.is_active.is_(True)))
     ).scalar_one_or_none()
     if store is None:
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
@@ -535,6 +539,7 @@ async def apply_codes_start(
 
     job_id = uuid.uuid4().hex[:10]
     _apply_jobs[job_id] = {
+        "store_id": store_id,
         "status": "running",
         "total": 0,
         "done": 0,
@@ -549,10 +554,11 @@ async def apply_codes_start(
 
 
 @router.get("/apply-codes/jobs/{job_id}")
-async def get_apply_job(job_id: str):
+async def get_apply_job(job_id: str, store_id: int = Depends(current_store_id)):
     job = _apply_jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job nie istnieje")
+    ensure_owned(job.get("store_id"), store_id)
     return job
 
 
@@ -571,7 +577,10 @@ async def _run_apply_job(
             prods = (
                 await db.execute(
                     select(RawProduct.product_id, RawProduct.code)
-                    .where(RawProduct.product_id.in_(body.product_ids))
+                    .where(
+                        RawProduct.store_id == body.store_id,
+                        RawProduct.product_id.in_(body.product_ids),
+                    )
                 )
             ).all()
         prod_code_map: dict[int, str] = {r.product_id: (r.code or "") for r in prods}
@@ -827,7 +836,7 @@ class ProductEntry(BaseModel):
 
 
 class CreateStocksRequest(BaseModel):
-    store_id: int
+    store_id: int | None = None  # optional; must match the app session when sent
     products: list[ProductEntry]
     segments: list[SegmentGroup]
     default_price: float = 0.0
@@ -837,12 +846,14 @@ class CreateStocksRequest(BaseModel):
 @router.post("/create-stocks")
 async def create_stocks(
     body: CreateStocksRequest,
+    store_id: int = Depends(current_store_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Generate all code combinations from base product codes × segment groups
     and create missing product-stocks in Shoper.
     """
+    check_store(body.store_id, store_id)
     if not body.products:
         raise HTTPException(400, "Brak wybranych produktów")
     for seg in body.segments:
@@ -859,7 +870,7 @@ async def create_stocks(
 
     # Get store
     store = (
-        await db.execute(select(Store).where(Store.id == body.store_id, Store.is_active.is_(True)))
+        await db.execute(select(Store).where(Store.id == store_id, Store.is_active.is_(True)))
     ).scalar_one_or_none()
     if store is None:
         raise HTTPException(404, "Sklep nie znaleziony lub nieaktywny")
@@ -874,7 +885,7 @@ async def create_stocks(
     if body.skip_existing:
         product_ids = [p.product_id for p in body.products]
         stmt = select(RawProductStock.code).where(
-            RawProductStock.store_id == body.store_id,
+            RawProductStock.store_id == store_id,
             RawProductStock.product_id.in_(product_ids),
         )
         rows = (await db.execute(stmt)).scalars().all()
