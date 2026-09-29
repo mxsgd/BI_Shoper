@@ -1,11 +1,46 @@
 import { STATIC_DEMO, getSnapshot, readOnlyError } from "./staticDemo";
 
 const BASE = "/api";
-const STORE_ID = 1;
+
+export interface AppSession {
+  store_id: number;
+  shop: string | null;
+}
+
+// Set once by loadSession() before the app renders. The store always comes from the signed session
+// cookie issued by the Shoper iframe entry, never from a value baked into the bundle.
+let session: AppSession | null = null;
+
+export class NoSessionError extends Error {}
+
+export async function loadSession(): Promise<AppSession> {
+  if (STATIC_DEMO) {
+    // Snapshot files are not keyed by store, so any id works here.
+    session = { store_id: 0, shop: null };
+    return session;
+  }
+  const res = await fetch(`${BASE}/shoper/app/session`, { credentials: "include" });
+  if (res.ok) {
+    session = (await res.json()) as AppSession;
+    return session;
+  }
+  // Local development outside the Shoper iframe has no session cookie; allow an explicit opt-in store.
+  const devStore = import.meta.env.DEV ? Number(import.meta.env.VITE_DEV_STORE_ID) : NaN;
+  if (res.status === 401 && Number.isInteger(devStore) && devStore > 0) {
+    session = { store_id: devStore, shop: null };
+    return session;
+  }
+  throw new NoSessionError(res.status === 401 ? "no-session" : `${res.status} ${res.statusText}`);
+}
+
+export function currentStoreId(): number {
+  if (!session) throw new NoSessionError("Session not loaded");
+  return session.store_id;
+}
 
 async function get<T>(path: string, params: Record<string, string | number | undefined | null> = {}): Promise<T> {
   if (STATIC_DEMO) return getSnapshot<T>(path, params);
-  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  const qs = new URLSearchParams({ store_id: String(currentStoreId()) });
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null) continue;
     qs.set(k, String(v));
@@ -17,7 +52,7 @@ async function get<T>(path: string, params: Record<string, string | number | und
 
 async function post<T>(path: string, body: unknown = {}): Promise<T> {
   if (STATIC_DEMO) throw readOnlyError();
-  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  const qs = new URLSearchParams({ store_id: String(currentStoreId()) });
   const res = await fetch(`${BASE}${path}?${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -46,7 +81,7 @@ async function put<T>(path: string, body: unknown = {}): Promise<T> {
 
 async function postForm<T>(path: string, formData: FormData, params: Record<string, string | number | undefined> = {}): Promise<T> {
   if (STATIC_DEMO) throw readOnlyError();
-  const qs = new URLSearchParams({ store_id: String(STORE_ID) });
+  const qs = new URLSearchParams({ store_id: String(currentStoreId()) });
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined) continue;
     qs.set(k, String(v));
@@ -580,8 +615,8 @@ export const api = {
   cart: (period = 30) => get<CartData>("/analytics/cart", { period }),
   tracker: (period = 7) => get<TrackerEventSummary>("/analytics/tracker", { period }),
   syncNow: (scope: "quick" | "all" | "orders" | "products" | "customers" | "reference" | "transform" | "ga4" = "quick") =>
-    post<Record<string, unknown>>("/stores/sync-now", { store_id: STORE_ID, scope }),
-  getSyncStatus: () => get<StoreSyncStatus>(`/stores/${STORE_ID}/sync-status`),
+    post<Record<string, unknown>>("/stores/sync-now", { store_id: currentStoreId(), scope }),
+  getSyncStatus: () => get<StoreSyncStatus>(`/stores/${currentStoreId()}/sync-status`),
   getTrackingSettings: () => get<TrackingSettings>("/settings/tracking"),
   updateTrackingSettings: (body: { ga4_measurement_id: string | null; ga4_property_id: string | null }) =>
     put<TrackingSettings>("/settings/tracking", body),
@@ -634,8 +669,8 @@ export const api = {
     get<DetectOptionsResult>("/variant-codes/detect-options", { product_id: productId }),
   detectOptionsMulti: (productIds: number[]) =>
     get<DetectOptionsResult>("/variant-codes/detect-options-multi", { product_ids: productIds.join(",") }),
-  startApplyCodes: (body: ApplyCodesRequest) =>
-    post<{ job_id: string }>("/variant-codes/apply-codes/start", body),
+  startApplyCodes: (body: Omit<ApplyCodesRequest, "store_id">) =>
+    post<{ job_id: string }>("/variant-codes/apply-codes/start", { ...body, store_id: currentStoreId() }),
   getApplyCodesJob: (jobId: string) =>
     get<ApplyCodesJob>(`/variant-codes/apply-codes/jobs/${jobId}`),
   createVariantStocks: (body: CreateVariantStocksRequest) =>

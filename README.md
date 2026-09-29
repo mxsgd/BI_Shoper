@@ -165,6 +165,10 @@ npm install
 npm run dev
 ```
 
+Inside Shoper the panel gets its store from the signed session cookie (`GET /api/shoper/app/session`).
+Outside the iframe there is no session, so `npm run dev` falls back to `VITE_DEV_STORE_ID` from
+`analytics-embed/.env.development`. Production builds ignore it and show a "no session" screen instead.
+
 ### 3. Convenience script
 
 From the repo root, you can use:
