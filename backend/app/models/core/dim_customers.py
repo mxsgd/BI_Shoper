@@ -1,5 +1,5 @@
 """CORE: dim_customers - star schema dimension table."""
-from sqlalchemy import BigInteger, String, Numeric, Integer, DateTime, ForeignKey, func
+from sqlalchemy import BigInteger, String, Numeric, Integer, DateTime, ForeignKey, PrimaryKeyConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ...database import Base
 
@@ -7,8 +7,11 @@ from ...database import Base
 class DimCustomer(Base):
     """Dimension table: customers with aggregated metrics. For LTV, RFM, retention analysis."""
     __tablename__ = "dim_customers"
+    # Shoper ids are per-shop sequences (every shop has an order #1), so a row is identified by
+    # (store_id, <shoper id>). store_id leads the key, which also serves the per-store filters.
+    __table_args__ = (PrimaryKeyConstraint("store_id", "customer_id", name="dim_customers_pkey"),)
 
-    customer_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(BigInteger)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
     
     # Dates

@@ -1,5 +1,5 @@
 """CORE: fact_orders - star schema fact table."""
-from sqlalchemy import BigInteger, String, Numeric, Integer, DateTime, ForeignKey, func
+from sqlalchemy import BigInteger, String, Numeric, Integer, DateTime, ForeignKey, PrimaryKeyConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ...database import Base
 
@@ -7,8 +7,11 @@ from ...database import Base
 class FactOrder(Base):
     """Fact table: one order = one record. Optimized for analytical queries."""
     __tablename__ = "fact_orders"
+    # Shoper ids are per-shop sequences (every shop has an order #1), so a row is identified by
+    # (store_id, <shoper id>). store_id leads the key, which also serves the per-store filters.
+    __table_args__ = (PrimaryKeyConstraint("store_id", "order_id", name="fact_orders_pkey"),)
 
-    order_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    order_id: Mapped[int] = mapped_column(BigInteger)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
     customer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)  # FK to dim_customers
     

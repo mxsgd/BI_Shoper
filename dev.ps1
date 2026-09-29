@@ -23,6 +23,16 @@ if (-not (Test-Path $backendPython)) {
     exit 1
 }
 
+Write-Host "Migracje bazy (alembic upgrade head)..." -ForegroundColor Cyan
+Push-Location $backendDir
+& $backendPython -m alembic upgrade head
+$migrationExit = $LASTEXITCODE
+Pop-Location
+if ($migrationExit -ne 0) {
+    Write-Error "Migracje nie przeszly. Baza sprzed Alembica? Uruchom raz: python scripts/adopt_legacy_db.py --apply (w katalogu backend)"
+    exit 1
+}
+
 Write-Host "Uruchamianie backendu (nowe okno PowerShell)..." -ForegroundColor Cyan
 Start-Process powershell -WorkingDirectory $backendDir -ArgumentList @(
     "-NoExit",

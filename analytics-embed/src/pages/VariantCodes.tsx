@@ -473,7 +473,6 @@ export default function VariantCodes() {
 
     try {
       const res = await api.startApplyCodes({
-        store_id: 1,
         product_ids: selectedProducts.map((p) => p.product_id),
         option_groups: optionGroups,
         prices,
@@ -522,7 +521,6 @@ export default function VariantCodes() {
 
     try {
       const res = await api.startApplyCodes({
-        store_id: 1,
         product_ids: selectedProducts.map((p) => p.product_id),
         option_groups: optionGroups,
         prices,

@@ -2,6 +2,19 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
+from sqlalchemy.engine import make_url
+
+
+def as_sync_url(url: str) -> str:
+    """The same database on the psycopg2 driver (Alembic and scripts are synchronous).
+
+    The driver is always named: a bare postgresql:// means psycopg2 on SQLAlchemy 2.0 but
+    psycopg (v3, not installed) on 2.1.
+    """
+    parsed = make_url(url)
+    if parsed.drivername in ("postgresql", "postgresql+asyncpg", "postgres"):
+        parsed = parsed.set(drivername="postgresql+psycopg2")
+    return parsed.render_as_string(hide_password=False)
 
 
 class Settings(BaseSettings):
@@ -48,10 +61,8 @@ class Settings(BaseSettings):
 
     @property
     def sync_db_url(self) -> str:
-        """Sync URL for Alembic (replace asyncpg with psycopg2)."""
-        if self.sync_database_url:
-            return self.sync_database_url
-        return self.database_url.replace("+asyncpg", "")
+        """Sync URL for Alembic and scripts (psycopg2 driver)."""
+        return as_sync_url(self.sync_database_url or self.database_url)
 
     @property
     def session_secret(self) -> str:

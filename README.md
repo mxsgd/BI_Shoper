@@ -40,11 +40,12 @@ Implemented:
 - CSV bulk price update workflow with validation, progress tracking, logs, and exports
 - Deterministic synthetic demo dataset and SQL data-quality checks
 - CI for backend and frontend, plus a static GitHub Pages demo
+- Alembic migrations as the only source of schema changes, checked against the models in CI
+- Multi-store CORE layer: every table is keyed by (store, Shoper id), since each shop numbers from 1
 
 In progress:
 
 - Partner API OAuth installation flow
-- Alembic-based migration workflow
 - Docker Compose local environment
 - Production deployment documentation
 
@@ -123,9 +124,8 @@ graph TD
 backend/            FastAPI app, sync services, analytics routes, DB models
 analytics-embed/    React dashboard embedded in Shoper admin
 tracker/            Tracker-related code and event pipeline work
-docs/               Product notes, architecture docs, panel screenshots, and specs
-PLAN.md             High-level architecture and data model notes
-PRICE_UPDATE_PANEL_SPEC.md
+dbt/                dbt project for RAW -> CORE transforms (in progress)
+docs/               Shoper integration, API reference, and DB management notes
 ```
 
 ## Local Development
@@ -143,6 +143,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
+python -m alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -165,6 +166,10 @@ cd analytics-embed
 npm install
 npm run dev
 ```
+
+Inside Shoper the panel gets its store from the signed session cookie (`GET /api/shoper/app/session`).
+Outside the iframe there is no session, so `npm run dev` falls back to `VITE_DEV_STORE_ID` from
+`analytics-embed/.env.development`. Production builds ignore it and show a "no session" screen instead.
 
 ### 3. Convenience script
 
@@ -252,7 +257,6 @@ Implemented:
 
 Still in progress:
 - Full Partner API OAuth installation flow
-- Formal migration workflow with Alembic
 - Better deployment and production setup documentation
 
 ## Why This Project Is Interesting
@@ -268,11 +272,9 @@ It is a good example of building a vertical product end-to-end: from third-party
 
 ## Related Docs
 
-- `PLAN.md`
-- `docs/SHOPER_PANEL_APP.md`
+- `docs/SHOPER_APPSTORE_INTEGRATION.md`
 - `docs/DB_MANAGEMENT.md`
-- `PRICE_UPDATE_PANEL_SPEC.md`
-- `docs/tracker-roadmap.md`
+- `docs/ShoperAPI-Reference.md`
 
 ## License
 

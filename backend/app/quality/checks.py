@@ -44,29 +44,30 @@ SOURCE_CHANNELS = "'shop','facebook','mobile','allegro','webapi','panel','admin'
 
 CHECKS: tuple[Check, ...] = (
     # ---- integrity -------------------------------------------------------
-    Check("fact_orders_key_unique", "integrity", "one fact row per order_id",
-          "SELECT COUNT(*) - COUNT(DISTINCT order_id) FROM fact_orders"),
+    Check("fact_orders_key_unique", "integrity", "one fact row per (store, order)",
+          "SELECT COUNT(*) - COUNT(DISTINCT (store_id, order_id)) FROM fact_orders"),
     Check("fact_order_items_key_unique", "integrity", "one fact row per order line",
-          "SELECT COUNT(*) - COUNT(DISTINCT order_item_id) FROM fact_order_items"),
+          "SELECT COUNT(*) - COUNT(DISTINCT (store_id, order_item_id)) FROM fact_order_items"),
     Check("fact_orders_required_columns", "integrity", "order_date, gross_value, order_status are never NULL",
           "SELECT COUNT(*) FROM fact_orders WHERE order_date IS NULL OR gross_value IS NULL OR order_status IS NULL"),
     # ---- referential -----------------------------------------------------
     Check("items_have_order", "referential", "every order line belongs to an order",
-          "SELECT COUNT(*) FROM fact_order_items i LEFT JOIN fact_orders o USING (order_id) WHERE o.order_id IS NULL"),
+          "SELECT COUNT(*) FROM fact_order_items i LEFT JOIN fact_orders o USING (store_id, order_id) "
+          "WHERE o.order_id IS NULL"),
     Check("orders_have_customer_dim", "referential", "non-guest orders point to a known customer",
-          "SELECT COUNT(*) FROM fact_orders o LEFT JOIN dim_customers c ON c.customer_id = o.customer_id "
+          "SELECT COUNT(*) FROM fact_orders o LEFT JOIN dim_customers c ON c.store_id = o.store_id AND c.customer_id = o.customer_id "
           "WHERE o.customer_id IS NOT NULL AND c.customer_id IS NULL"),
     Check("items_have_product_dim", "referential", "order lines point to a known product",
-          "SELECT COUNT(*) FROM fact_order_items i LEFT JOIN dim_products p ON p.product_id = i.product_id "
+          "SELECT COUNT(*) FROM fact_order_items i LEFT JOIN dim_products p ON p.store_id = i.store_id AND p.product_id = i.product_id "
           "WHERE i.product_id IS NOT NULL AND p.product_id IS NULL"),
     Check("items_have_category_dim", "referential", "order lines point to a known category",
-          "SELECT COUNT(*) FROM fact_order_items i LEFT JOIN dim_categories c ON c.category_id = i.category_id "
+          "SELECT COUNT(*) FROM fact_order_items i LEFT JOIN dim_categories c ON c.store_id = i.store_id AND c.category_id = i.category_id "
           "WHERE i.category_id IS NOT NULL AND c.category_id IS NULL"),
     Check("products_have_category_dim", "referential", "products point to a known category",
-          "SELECT COUNT(*) FROM dim_products p LEFT JOIN dim_categories c ON c.category_id = p.category_id "
+          "SELECT COUNT(*) FROM dim_products p LEFT JOIN dim_categories c ON c.store_id = p.store_id AND c.category_id = p.category_id "
           "WHERE p.category_id IS NOT NULL AND c.category_id IS NULL"),
     Check("categories_parent_exists", "referential", "category tree has no dangling parent",
-          "SELECT COUNT(*) FROM dim_categories c LEFT JOIN dim_categories p ON p.category_id = c.parent_id "
+          "SELECT COUNT(*) FROM dim_categories c LEFT JOIN dim_categories p ON p.store_id = c.store_id AND p.category_id = c.parent_id "
           "WHERE c.parent_id IS NOT NULL AND p.category_id IS NULL"),
     # ---- validity --------------------------------------------------------
     Check("order_date_not_placeholder", "validity",
@@ -113,12 +114,12 @@ CHECKS: tuple[Check, ...] = (
           kind="reconcile", tolerance=0.0001),
     Check("order_total_equals_lines_plus_shipping", "reconciliation",
           "order gross = sum(line gross) + shipping (breaks when order-level discounts exist)",
-          "SELECT COUNT(*) FROM fact_orders o JOIN (SELECT order_id, SUM(total_gross) g FROM fact_order_items "
-          "GROUP BY order_id) i USING (order_id) WHERE ABS(o.gross_value - o.shipping_value - i.g) > 0.02"),
+          "SELECT COUNT(*) FROM fact_orders o JOIN (SELECT store_id, order_id, SUM(total_gross) g FROM fact_order_items "
+          "GROUP BY store_id, order_id) i USING (store_id, order_id) WHERE ABS(o.gross_value - o.shipping_value - i.g) > 0.02"),
     Check("customer_totals_match_orders", "reconciliation",
           "dim_customers.total_orders/revenue equal the fact_orders roll-up",
-          "SELECT COUNT(*) FROM dim_customers c LEFT JOIN (SELECT customer_id, COUNT(*) n, SUM(gross_value) r "
-          "FROM fact_orders GROUP BY customer_id) f ON f.customer_id = c.customer_id "
+          "SELECT COUNT(*) FROM dim_customers c LEFT JOIN (SELECT store_id, customer_id, COUNT(*) n, SUM(gross_value) r "
+          "FROM fact_orders GROUP BY store_id, customer_id) f ON f.store_id = c.store_id AND f.customer_id = c.customer_id "
           "WHERE COALESCE(f.n,0) <> c.total_orders OR ABS(COALESCE(f.r,0) - c.total_revenue) > 0.01"),
     Check("ga4_sources_vs_traffic_sessions", "reconciliation", "per-source sessions add up to total GA4 sessions",
           "SELECT (SELECT COALESCE(SUM(sessions),0) FROM raw_ga4_sources), "

@@ -1,5 +1,5 @@
 """CORE: dim_products - star schema dimension table."""
-from sqlalchemy import BigInteger, String, Numeric, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import BigInteger, String, Numeric, Boolean, DateTime, ForeignKey, PrimaryKeyConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from ...database import Base
 
@@ -7,8 +7,11 @@ from ...database import Base
 class DimProduct(Base):
     """Dimension table: products with pricing. For product analysis, Pareto, margin analysis."""
     __tablename__ = "dim_products"
+    # Shoper ids are per-shop sequences (every shop has an order #1), so a row is identified by
+    # (store_id, <shoper id>). store_id leads the key, which also serves the per-store filters.
+    __table_args__ = (PrimaryKeyConstraint("store_id", "product_id", name="dim_products_pkey"),)
 
-    product_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    product_id: Mapped[int] = mapped_column(BigInteger)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
     
     # Product info

@@ -66,9 +66,10 @@ class TransformService:
     # ------------------------------------------------------------------
     async def transform_dim_categories(self) -> int:
         sql = text("""
-            INSERT INTO dim_categories (category_id, category_name, parent_id)
+            INSERT INTO dim_categories (category_id, store_id, category_name, parent_id)
             SELECT
                 rc.category_id,
+                rc.store_id,
                 COALESCE(
                     rc.translations -> 'pl_PL' ->> 'name',
                     rc.translations -> 'en_GB' ->> 'name',
@@ -76,7 +77,7 @@ class TransformService:
                 ),
                 (rc.translations ->> '_parent_id')::int
             FROM raw_categories rc
-            ON CONFLICT (category_id) DO UPDATE SET
+            ON CONFLICT (store_id, category_id) DO UPDATE SET
                 category_name = EXCLUDED.category_name,
                 parent_id     = EXCLUDED.parent_id
         """)
@@ -122,7 +123,7 @@ class TransformService:
                 ON base_stock.store_id = rp.store_id
                 AND base_stock.product_id = rp.product_id
                 AND COALESCE(base_stock.extended, false) = false
-            ON CONFLICT (product_id) DO UPDATE SET
+            ON CONFLICT (store_id, product_id) DO UPDATE SET
                 product_name = EXCLUDED.product_name,
                 category_id  = EXCLUDED.category_id,
                 brand        = EXCLUDED.brand,
@@ -167,7 +168,7 @@ class TransformService:
                 WHERE ro.user_id IS NOT NULL
                 GROUP BY ro.store_id, ro.user_id
             ) agg ON agg.store_id = rc.store_id AND agg.user_id = rc.user_id
-            ON CONFLICT (customer_id) DO UPDATE SET
+            ON CONFLICT (store_id, customer_id) DO UPDATE SET
                 first_order_date = EXCLUDED.first_order_date,
                 last_order_date  = EXCLUDED.last_order_date,
                 total_orders     = EXCLUDED.total_orders,
@@ -179,13 +180,17 @@ class TransformService:
         await self.db.commit()
         count = result.rowcount
 
+        # Quintiles are relative to the customer's own shop, not to every shop in the database.
+        # customer_id breaks ties (most customers have exactly one order): without it NTILE splits
+        # tied rows in whatever order Postgres reads them, and scores change between runs.
         rfm_sql = text("""
             WITH rfm AS (
                 SELECT
+                    store_id,
                     customer_id,
-                    NTILE(5) OVER (ORDER BY last_order_date ASC)  AS r,
-                    NTILE(5) OVER (ORDER BY total_orders)         AS f,
-                    NTILE(5) OVER (ORDER BY total_revenue)        AS m
+                    NTILE(5) OVER (PARTITION BY store_id ORDER BY last_order_date ASC, customer_id) AS r,
+                    NTILE(5) OVER (PARTITION BY store_id ORDER BY total_orders, customer_id)        AS f,
+                    NTILE(5) OVER (PARTITION BY store_id ORDER BY total_revenue, customer_id)       AS m
                 FROM dim_customers
                 WHERE total_orders > 0
             )
@@ -193,7 +198,7 @@ class TransformService:
             SET rfm_score = rfm.r::text || rfm.f::text || rfm.m::text,
                 updated_at = now()
             FROM rfm
-            WHERE dc.customer_id = rfm.customer_id
+            WHERE dc.store_id = rfm.store_id AND dc.customer_id = rfm.customer_id
         """)
         await self.db.execute(rfm_sql)
         await self.db.commit()
@@ -262,7 +267,7 @@ class TransformService:
                 GROUP BY roi2.store_id, roi2.order_id
             ) items_cost
                 ON items_cost.store_id = ro.store_id AND items_cost.order_id = ro.order_id
-            ON CONFLICT (order_id) DO UPDATE SET
+            ON CONFLICT (store_id, order_id) DO UPDATE SET
                 customer_id    = EXCLUDED.customer_id,
                 order_date     = EXCLUDED.order_date,
                 payment_date   = EXCLUDED.payment_date,
@@ -290,13 +295,14 @@ class TransformService:
         ts_order = _sql_safe_timestamp("ro.date")
         sql = text(f"""
             INSERT INTO fact_order_items (
-                order_item_id, order_id, product_id, category_id,
+                order_item_id, store_id, order_id, product_id, category_id,
                 quantity, unit_price_gross, unit_price_net,
                 discount_value, total_gross, total_net,
                 order_date
             )
             SELECT
                 roi.order_item_id,
+                roi.store_id,
                 roi.order_id,
                 roi.product_id,
                 rp.category_id,
@@ -314,7 +320,7 @@ class TransformService:
                 ON rp.store_id = roi.store_id AND rp.product_id = roi.product_id
             LEFT JOIN raw_taxes rt
                 ON rt.store_id = rp.store_id AND rt.tax_id = rp.tax_id
-            ON CONFLICT (order_item_id) DO UPDATE SET
+            ON CONFLICT (store_id, order_item_id) DO UPDATE SET
                 product_id       = EXCLUDED.product_id,
                 category_id      = EXCLUDED.category_id,
                 quantity         = EXCLUDED.quantity,
@@ -331,7 +337,8 @@ class TransformService:
         await self.db.execute(text("""
             DELETE FROM fact_order_items f
             WHERE NOT EXISTS (
-                SELECT 1 FROM raw_order_items r WHERE r.order_item_id = f.order_item_id
+                SELECT 1 FROM raw_order_items r
+                WHERE r.store_id = f.store_id AND r.order_item_id = f.order_item_id
             )
         """))
         await self.db.commit()

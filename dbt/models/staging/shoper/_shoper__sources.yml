@@ -1,0 +1,51 @@
+# Declares the raw_* tables (populated by the FastAPI sync job, outside dbt's control) as dbt
+# "sources" - the entry point of the dependency graph. Staging models read these via
+# `{{ source('shoper', 'orders') }}` instead of hardcoding "raw_orders", so lineage and freshness
+# are tracked from the very first table onward, not just between dbt models.
+#
+# `identifier` is the real table name in Postgres; the name on the line above it (e.g. `orders`)
+# is the short logical name used in source() calls - the "raw" prefix is already implied by being
+# listed under this source block, so repeating it in every reference would be noise.
+version: 2
+
+sources:
+  - name: shoper
+    description: >
+      RAW staging layer: a 1:1 copy of what the Shoper REST API returns, kept as close to the
+      source shape as possible. No business logic lives here - that starts in staging models.
+    schema: public
+    tables:
+      - name: orders
+        identifier: raw_orders
+        description: One row per order, exactly as synced from Shoper's /orders endpoint.
+        loaded_at_field: loaded_at
+        freshness:
+          # dbt checks the newest loaded_at against "now" at the moment `dbt source freshness` runs.
+          # This answers "is the sync job still alive?", not "did we get orders recently" - a quiet
+          # week with zero orders is not the same failure as a sync job that silently died.
+          warn_after: { count: 6, period: hour }
+          error_after: { count: 24, period: hour }
+      - name: order_items
+        identifier: raw_order_items
+        description: One row per order line item.
+      - name: products
+        identifier: raw_products
+        description: Product catalog as synced from Shoper, including nested JSON (translations, stock).
+      - name: customers
+        identifier: raw_customers
+        description: Customer/user records from Shoper.
+      - name: categories
+        identifier: raw_categories
+        description: Product category tree (self-referencing via parent_id inside translations JSON).
+      - name: statuses
+        identifier: raw_statuses
+        description: Order status definitions (id -> display name).
+      - name: producers
+        identifier: raw_producers
+        description: Product brand/manufacturer records.
+      - name: product_stocks
+        identifier: raw_product_stocks
+        description: Per-variant stock/price records; the "extended = false" row is the base variant.
+      - name: taxes
+        identifier: raw_taxes
+        description: Tax rate definitions referenced by products.

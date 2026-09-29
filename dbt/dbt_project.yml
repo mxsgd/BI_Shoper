@@ -1,0 +1,30 @@
+# The project manifest - the one file every dbt project must have.
+# `dbt <command>` reads this to know the project's name, where its .sql files live,
+# and how each folder of models should be materialized by default.
+
+name: "bi_shoper"
+version: "1.0.0"
+
+# Must match a profile name in profiles.yml - that's how dbt knows which
+# database credentials to use for this project (see profiles.yml.example).
+profile: "bi_shoper"
+
+# Where dbt looks for .sql model files.
+model-paths: ["models"]
+# Where dbt writes compiled SQL and run artifacts (manifest.json, run_results.json).
+# Never commit this - it's build output, regenerated on every run.
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  bi_shoper:
+    # staging/: thin 1:1 views over the raw Shoper/GA4 tables (renamed, cast, no business logic).
+    # A view costs nothing to keep up to date - it's just a saved query - so there's no reason
+    # to materialize it as a table.
+    staging:
+      +materialized: view
+    # marts/: the business-facing star schema - dim_products, fact_orders, etc. These get queried
+    # by the analytics API on every dashboard load, so they're real tables: computed once per
+    # `dbt build`, then read many times for free instead of being recomputed per request.
+    marts:
+      +materialized: table

@@ -63,6 +63,7 @@ async def seed_database(database_url: str, config: DemoConfig | None = None) -> 
     """Drop + recreate the schema in a disposable database, load RAW rows, run RAW -> CORE."""
     import app.models  # noqa: F401  (registers every table on Base.metadata)
     from app.database import Base
+    from app.migrations import upgrade_to_head
     from app.services.transform_service import TransformService
 
     url = make_url(database_url)
@@ -75,7 +76,9 @@ async def seed_database(database_url: str, config: DemoConfig | None = None) -> 
         async with engine.begin() as conn:
             await conn.execute(text("DROP SCHEMA public CASCADE"))
             await conn.execute(text("CREATE SCHEMA public"))
-            await conn.run_sync(Base.metadata.create_all)
+        # The real migrations build the schema, so every seed (and every test run) exercises them.
+        await asyncio.to_thread(upgrade_to_head, url.render_as_string(hide_password=False))
+        async with engine.begin() as conn:
             await conn.run_sync(_tracker_meta.create_all)
             for name, rows in data.items():
                 table = TRACKER_EVENTS if name == "tracker_events_local" else Base.metadata.tables[name]

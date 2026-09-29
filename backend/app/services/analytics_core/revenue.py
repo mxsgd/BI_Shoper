@@ -117,8 +117,8 @@ class RevenueService:
                 COALESCE(SUM(foi.total_gross), 0) AS revenue,
                 COALESCE(SUM(foi.quantity), 0) AS quantity
             FROM fact_order_items foi
-            JOIN fact_orders fo ON fo.order_id = foi.order_id
-            LEFT JOIN dim_categories dc ON dc.category_id = foi.category_id
+            JOIN fact_orders fo ON fo.store_id = foi.store_id AND fo.order_id = foi.order_id
+            LEFT JOIN dim_categories dc ON dc.store_id = foi.store_id AND dc.category_id = foi.category_id
             WHERE fo.store_id = :store_id AND fo.order_date::date = :focus_date
             GROUP BY COALESCE(dc.category_name, 'Bez kategorii')
             ORDER BY revenue DESC
@@ -162,8 +162,8 @@ class RevenueService:
                 COALESCE(SUM(foi.total_gross), 0) AS revenue,
                 COALESCE(SUM(foi.quantity), 0) AS quantity
             FROM fact_order_items foi
-            JOIN fact_orders fo ON fo.order_id = foi.order_id
-            LEFT JOIN dim_categories dc ON dc.category_id = foi.category_id
+            JOIN fact_orders fo ON fo.store_id = foi.store_id AND fo.order_id = foi.order_id
+            LEFT JOIN dim_categories dc ON dc.store_id = foi.store_id AND dc.category_id = foi.category_id
             WHERE fo.store_id = :store_id AND fo.order_date::date >= :since
             GROUP BY COALESCE(dc.category_name, 'Bez kategorii')
             ORDER BY revenue DESC
