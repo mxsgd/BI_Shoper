@@ -1,0 +1,21 @@
+# Docs and tests for the staging models. `dbt build` runs each model and then its tests right
+# away - if a test fails, the models downstream of it are skipped instead of built on bad data.
+version: 2
+
+models:
+  - name: stg_shoper__orders
+    description: One row per Shoper order, renamed and typed. Dates parsed, empty strings nulled.
+    columns:
+      - name: order_id
+        description: Shoper's order id. Unique only within a store, not globally.
+        data_tests:
+          - not_null
+      - name: store_id
+        data_tests:
+          - not_null
+      - name: ordered_at
+        description: When the order was placed. NULL if Shoper sent an empty/zero date.
+      - name: order_total
+        description: Order gross total ('sum' in the API), in the order's currency.
+        data_tests:
+          - not_null
