@@ -1,0 +1,4 @@
+# Third-party dbt packages - `dbt deps` downloads them into dbt_packages/ (gitignored build output).
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]

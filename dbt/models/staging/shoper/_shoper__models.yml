@@ -1,0 +1,123 @@
+# Docs and tests for the staging models. `dbt build` runs each model and then its tests right
+# away - if a test fails, the models downstream of it are skipped instead of built on bad data.
+version: 2
+
+models:
+  - name: stg_shoper__orders
+    description: One row per Shoper order, renamed and typed. Dates parsed, empty strings nulled.
+    # Model-level test (sits next to `columns:`, not inside it) because the key is two columns.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, order_id]
+    columns:
+      - name: order_id
+        description: Shoper's order id. Unique only within a store, not globally.
+        data_tests:
+          - not_null
+      - name: store_id
+        data_tests:
+          - not_null
+      - name: ordered_at
+        description: When the order was placed. NULL if Shoper sent an empty/zero date.
+      - name: order_total
+        description: Order gross total ('sum' in the API), in the order's currency.
+        data_tests:
+          - not_null
+
+  - name: stg_shoper__order_items
+    description: One row per product line in an order.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, order_item_id]
+    columns:
+      - name: order_item_id
+        data_tests: [not_null]
+      - name: order_id
+        data_tests:
+          - not_null
+          # Every line must belong to an order that exists. Checks order_id only (not store_id),
+          # good enough while there is one store per database.
+          - relationships:
+              arguments:
+                to: ref('stg_shoper__orders')
+                field: order_id
+      - name: store_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__products
+    description: One row per product. Name and active flag extracted from translations JSON.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, product_id]
+    columns:
+      - name: product_id
+        data_tests: [not_null]
+      - name: store_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__product_stocks
+    description: One row per product variant. is_base_variant marks the variant holding the main price.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, stock_id]
+    columns:
+      - name: stock_id
+        data_tests: [not_null]
+      - name: product_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__customers
+    description: One row per registered customer. Guests are not here.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, customer_id]
+    columns:
+      - name: customer_id
+        data_tests: [not_null]
+      - name: store_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__categories
+    description: Product category tree; parent_category_id points back into this model.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, category_id]
+    columns:
+      - name: category_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__statuses
+    description: Order status lookup (status_id -> status_name).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, status_id]
+    columns:
+      - name: status_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__producers
+    description: Brand/manufacturer lookup.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, producer_id]
+    columns:
+      - name: producer_id
+        data_tests: [not_null]
+
+  - name: stg_shoper__taxes
+    description: Tax rate lookup.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_id, tax_id]
+    columns:
+      - name: tax_id
+        data_tests: [not_null]
