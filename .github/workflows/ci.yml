@@ -44,6 +44,13 @@ jobs:
           python -m alembic -x db_url=$MIGRATIONS_DB downgrade base
           python -m alembic -x db_url=$MIGRATIONS_DB upgrade head
       - run: python -m pytest -q
+      # Same steps as pages.yml, so a change that breaks the static demo fails here, not after merging to main.
+      - name: Demo snapshot
+        env:
+          DEMO_DB: postgresql+asyncpg://postgres:postgres@localhost:5432/bi_shoper_demo
+        run: |
+          python -m app.demo --database-url "$DEMO_DB"
+          python -m app.demo.snapshot --database-url "$DEMO_DB"
 
   frontend:
     runs-on: ubuntu-latest
