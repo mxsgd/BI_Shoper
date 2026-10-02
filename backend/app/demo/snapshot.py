@@ -64,6 +64,10 @@ async def build(out: Path, database_url: str, concurrency: int = 4) -> dict:
     import httpx
     from app.main import app
     from app.database import engine
+    from app.routers.access import current_session
+
+    # In-process calls carry no Shoper session cookie; act as the seeded demo store.
+    app.dependency_overrides[current_session] = lambda: {"store_id": STORE_ID, "shop": None}
 
     logging.getLogger("httpx").setLevel(logging.WARNING)  # one INFO line per request is ~1,500 lines of noise
     today = date.today()
