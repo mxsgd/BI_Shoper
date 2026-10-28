@@ -7,6 +7,7 @@ import { api } from "../api";
 import type { RevenueData } from "../api";
 import { FocusBanner } from "../components/FocusBanner";
 import { LineHitDot } from "../components/ChartHitDot";
+import { t, locale } from "../i18n";
 
 const COLORS = ["#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd", "#e0e7ff", "#f59e0b", "#10b981", "#ef4444"];
 
@@ -36,7 +37,7 @@ export default function Orders() {
   }, [period, groupBy, focusForApi]);
 
   if (loading && !data) return <Loader />;
-  if (!data) return <p>Brak danych</p>;
+  if (!data) return <p>{t("Brak danych", "No data")}</p>;
 
   const row =
     selectedDate && groupBy === "day"
@@ -62,10 +63,10 @@ export default function Orders() {
       <FocusBanner
         selectedDate={selectedDate}
         onClear={clearSelection}
-        subtitle="Szczegóły statusów i kategorii dotyczą wybranej daty (tylko widok dzienny)."
+        subtitle={t("Szczegóły statusów i kategorii dotyczą wybranej daty (tylko widok dzienny).", "Status and category details refer to the selected date (daily view only).")}
       />
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">Zamówienia</h2>
+        <h2 className="text-2xl font-bold">{t("Zamówienia", "Orders")}</h2>
         <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
           {([
             { value: 7, label: "7D", group: "day" },
@@ -91,18 +92,18 @@ export default function Orders() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <Stat label="Zamówienia" value={totalOrders} />
-        <Stat label="Przychód" value={`${totalRevenue.toLocaleString("pl-PL")} zł`} />
-        <Stat label="Śr./dzień" value={(totalOrders / Math.max(data.time_series.length, 1)).toFixed(1)} />
-        <Stat label="Śr. wartość" value={`${totalOrders ? (totalRevenue / totalOrders).toFixed(0) : 0} zł`} />
+        <Stat label={t("Zamówienia", "Orders")} value={totalOrders} />
+        <Stat label={t("Przychód", "Revenue")} value={`${totalRevenue.toLocaleString(locale)} zł`} />
+        <Stat label={t("Śr./dzień", "Avg./day")} value={(totalOrders / Math.max(data.time_series.length, 1)).toFixed(1)} />
+        <Stat label={t("Śr. wartość", "Avg. value")} value={`${totalOrders ? (totalRevenue / totalOrders).toFixed(0) : 0} zł`} />
       </div>
 
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-1">Przychód i zamówienia w czasie</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-1">{t("Przychód i zamówienia w czasie", "Revenue and orders over time")}</h3>
         <p className="text-xs text-slate-400 mb-3">
           {groupBy === "day"
-            ? "Kliknij punkt, aby zawęzić szczegóły statusów i kategorii do tego dnia."
-            : "Przełącz na widok dzienny (7D / 30D), aby wybierać konkretny dzień."}
+            ? t("Kliknij punkt, aby zawęzić szczegóły statusów i kategorii do tego dnia.", "Click a point to narrow status and category details to that day.")
+            : t("Przełącz na widok dzienny (7D / 30D), aby wybierać konkretny dzień.", "Switch to the daily view (7D / 30D) to pick a specific day.")}
         </p>
         <ResponsiveContainer width="100%" height={350}>
           <LineChart data={data.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -110,14 +111,14 @@ export default function Orders() {
             <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
             <YAxis yAxisId="rev" tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
             <YAxis yAxisId="ord" orientation="right" tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v, name) => (name === "Przychód" ? `${Number(v ?? 0).toLocaleString("pl-PL")} zł` : v)} />
+            <Tooltip formatter={(v, name) => (name === t("Przychód", "Revenue") ? `${Number(v ?? 0).toLocaleString(locale)} zł` : v)} />
             <Line
               yAxisId="rev"
               type="monotone"
               dataKey="revenue"
               stroke="#6366f1"
               strokeWidth={2}
-              name="Przychód"
+              name={t("Przychód", "Revenue")}
               dot={groupBy === "day" ? (props) => LineHitDot(props, selectedDate, toggleDate) : false}
               activeDot={false}
               isAnimationActive={false}
@@ -129,7 +130,7 @@ export default function Orders() {
               stroke="#f59e0b"
               strokeWidth={2}
               dot={false}
-              name="Zamówienia"
+              name={t("Zamówienia", "Orders")}
               isAnimationActive={false}
             />
           </LineChart>
@@ -138,18 +139,18 @@ export default function Orders() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
         <BreakdownSection
-          title="Przychód wg statusu"
+          title={t("Przychód wg statusu", "Revenue by status")}
           labelHeader="Status"
           rows={statusRows}
           chartLimit={statusRows.length}
         />
         <BreakdownSection
-          title="Przychód wg kategorii"
-          labelHeader="Kategoria"
+          title={t("Przychód wg kategorii", "Revenue by category")}
+          labelHeader={t("Kategoria", "Category")}
           rows={categoryRows}
           chartLimit={15}
           showQuantity
-          emptyMessage="Brak danych o kategoriach w wybranym okresie."
+          emptyMessage={t("Brak danych o kategoriach w wybranym okresie.", "No category data in the selected period.")}
         />
       </div>
     </div>
@@ -162,7 +163,7 @@ function BreakdownSection({
   rows,
   chartLimit,
   showQuantity = false,
-  emptyMessage = "Brak danych w wybranym okresie.",
+  emptyMessage = t("Brak danych w wybranym okresie.", "No data in the selected period."),
 }: {
   title: string;
   labelHeader: string;
@@ -194,8 +195,8 @@ function BreakdownSection({
                 width={110}
                 tickFormatter={(v) => (v.length > 16 ? `${v.slice(0, 16)}…` : v || "—")}
               />
-              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
-              <Bar dataKey="revenue" radius={[0, 4, 4, 0]} name="Przychód">
+              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString(locale)} zł`} />
+              <Bar dataKey="revenue" radius={[0, 4, 4, 0]} name={t("Przychód", "Revenue")}>
                 {chartRows.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
               </Bar>
             </BarChart>
@@ -207,8 +208,8 @@ function BreakdownSection({
             className="mt-4 flex w-full items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 transition-colors"
           >
             <span>
-              {expanded ? "Ukryj szczegóły" : "Pokaż szczegóły"}
-              <span className="ml-2 text-slate-400">({rows.length} pozycji)</span>
+              {expanded ? t("Ukryj szczegóły", "Hide details") : t("Pokaż szczegóły", "Show details")}
+              <span className="ml-2 text-slate-400">({rows.length} {t("pozycji", "rows")})</span>
             </span>
             <Chevron open={expanded} />
           </button>
@@ -219,9 +220,9 @@ function BreakdownSection({
                 <thead className="sticky top-0 bg-white">
                   <tr className="text-left text-slate-500">
                     <th className="px-3 py-2">{labelHeader}</th>
-                    <th className="px-3 py-2 text-right">Zam.</th>
-                    {showQuantity && <th className="px-3 py-2 text-right">Szt.</th>}
-                    <th className="px-3 py-2 text-right">Przychód</th>
+                    <th className="px-3 py-2 text-right">{t("Zam.", "Orders")}</th>
+                    {showQuantity && <th className="px-3 py-2 text-right">{t("Szt.", "Qty")}</th>}
+                    <th className="px-3 py-2 text-right">{t("Przychód", "Revenue")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -230,7 +231,7 @@ function BreakdownSection({
                       <td className="px-3 py-1.5 max-w-xs truncate" title={r.label}>{r.label}</td>
                       <td className="px-3 py-1.5 text-right">{r.orders}</td>
                       {showQuantity && <td className="px-3 py-1.5 text-right">{r.quantity ?? 0}</td>}
-                      <td className="px-3 py-1.5 text-right font-medium">{r.revenue.toLocaleString("pl-PL")} zł</td>
+                      <td className="px-3 py-1.5 text-right font-medium">{r.revenue.toLocaleString(locale)} zł</td>
                     </tr>
                   ))}
                 </tbody>

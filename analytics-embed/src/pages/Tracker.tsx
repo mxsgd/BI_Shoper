@@ -4,6 +4,7 @@ import {
 } from "recharts";
 import { api } from "../api";
 import type { TrackerEventSummary } from "../api";
+import { t, locale } from "../i18n";
 
 const PERIODS = [
   { value: 1, label: "24H" },
@@ -15,14 +16,14 @@ const PERIODS = [
 const EVENT_COLORS = ["#6366f1", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#f97316", "#14b8a6"];
 
 const EVENT_LABELS: Record<string, string> = {
-  page_view: "Wyświetlenie strony",
-  click: "Kliknięcie",
-  view_item: "Wyświetlenie produktu",
-  add_to_cart: "Dodanie do koszyka",
-  remove_from_cart: "Usunięcie z koszyka",
-  begin_checkout: "Rozpoczęcie checkout",
-  checkout_step: "Krok checkout",
-  purchase: "Zakup",
+  page_view: t("Wyświetlenie strony", "Page view"),
+  click: t("Kliknięcie", "Click"),
+  view_item: t("Wyświetlenie produktu", "Product view"),
+  add_to_cart: t("Dodanie do koszyka", "Add to cart"),
+  remove_from_cart: t("Usunięcie z koszyka", "Remove from cart"),
+  begin_checkout: t("Rozpoczęcie checkout", "Begin checkout"),
+  checkout_step: t("Krok checkout", "Checkout step"),
+  purchase: t("Zakup", "Purchase"),
 };
 
 function eventLabel(name: string): string {
@@ -40,7 +41,7 @@ export default function Tracker() {
   }, [period]);
 
   if (loading && !data) return <Loader />;
-  if (!data) return <p>Brak danych</p>;
+  if (!data) return <p>{t("Brak danych", "No data")}</p>;
 
   if (data.total_events === 0) {
     return (
@@ -48,14 +49,14 @@ export default function Tracker() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="text-2xl font-bold">Tracker</h2>
-            <p className="text-sm text-slate-500">Zdarzenia z własnego trackera (tracker_events_local)</p>
+            <p className="text-sm text-slate-500">{t("Zdarzenia z własnego trackera (tracker_events_local)", "Events from the first-party tracker (tracker_events_local)")}</p>
           </div>
           <PeriodSelector value={period} onChange={setPeriod} />
         </div>
         <div className="mt-8 bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
-          <p className="text-amber-800 font-medium">Brak eventów trackera w wybranym okresie</p>
+          <p className="text-amber-800 font-medium">{t("Brak eventów trackera w wybranym okresie", "No tracker events in the selected period")}</p>
           <p className="text-sm text-amber-600 mt-1">
-            Sprawdź, czy skrypt trackera jest zainstalowany na stronie sklepu i wysyła zdarzenia do API.
+            {t("Sprawdź, czy skrypt trackera jest zainstalowany na stronie sklepu i wysyła zdarzenia do API.", "Check that the tracker script is installed on the store and sending events to the API.")}
           </p>
         </div>
       </div>
@@ -65,7 +66,7 @@ export default function Tracker() {
   const eventsPerUser = data.distinct_users > 0 ? data.total_events / data.distinct_users : 0;
   const totalByEvent = data.by_event.reduce((sum, e) => sum + e.count, 0) || 1;
   const totalByUrl = data.top_urls.reduce((sum, u) => sum + u.count, 0) || 1;
-  const sinceLabel = new Date(data.since_iso).toLocaleString("pl-PL", {
+  const sinceLabel = new Date(data.since_iso).toLocaleString(locale, {
     day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
   });
 
@@ -75,7 +76,8 @@ export default function Tracker() {
         <div>
           <h2 className="text-2xl font-bold">Tracker</h2>
           <p className="text-sm text-slate-500">
-            Zdarzenia z własnego trackera <span className="text-slate-400">· od {sinceLabel}</span>
+            {t("Zdarzenia z własnego trackera", "Events from the first-party tracker")}{" "}
+            <span className="text-slate-400">· {t("od", "since")} {sinceLabel}</span>
           </p>
         </div>
         <PeriodSelector value={period} onChange={setPeriod} />
@@ -83,16 +85,16 @@ export default function Tracker() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiCard title="Zdarzenia" value={data.total_events.toLocaleString("pl-PL")} />
-        <KpiCard title="Unikalni użytkownicy" value={data.distinct_users.toLocaleString("pl-PL")} />
-        <KpiCard title="Zdarzeń / użytkownika" value={eventsPerUser.toFixed(1)} />
-        <KpiCard title="Typy zdarzeń" value={data.by_event.length.toString()} />
+        <KpiCard title={t("Zdarzenia", "Events")} value={data.total_events.toLocaleString(locale)} />
+        <KpiCard title={t("Unikalni użytkownicy", "Unique users")} value={data.distinct_users.toLocaleString(locale)} />
+        <KpiCard title={t("Zdarzeń / użytkownika", "Events / user")} value={eventsPerUser.toFixed(1)} />
+        <KpiCard title={t("Typy zdarzeń", "Event types")} value={data.by_event.length.toString()} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* Events by type */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Zdarzenia wg typu</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Zdarzenia wg typu", "Events by type")}</h3>
           {data.by_event.length > 0 ? (
             <ResponsiveContainer width="100%" height={Math.max(220, data.by_event.length * 34)}>
               <BarChart
@@ -110,7 +112,7 @@ export default function Tracker() {
                   width={140}
                 />
                 <Tooltip
-                  formatter={(v) => [Number(v ?? 0).toLocaleString("pl-PL"), "Liczba"]}
+                  formatter={(v) => [Number(v ?? 0).toLocaleString(locale), t("Liczba", "Count")]}
                   labelFormatter={(l) => eventLabel(String(l ?? ""))}
                 />
                 <Bar dataKey="count" radius={[0, 4, 4, 0]} isAnimationActive={false}>
@@ -121,19 +123,19 @@ export default function Tracker() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-sm text-slate-400">Brak danych</p>
+            <p className="text-sm text-slate-400">{t("Brak danych", "No data")}</p>
           )}
         </div>
 
         {/* Events by type table */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Rozkład zdarzeń</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Rozkład zdarzeń", "Event breakdown")}</h3>
           <div className="overflow-auto max-h-72">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="text-left text-slate-500 border-b border-slate-200">
-                  <th className="pb-2">Zdarzenie</th>
-                  <th className="pb-2 text-right">Liczba</th>
+                  <th className="pb-2">{t("Zdarzenie", "Event")}</th>
+                  <th className="pb-2 text-right">{t("Liczba", "Count")}</th>
                   <th className="pb-2 text-right">%</th>
                 </tr>
               </thead>
@@ -141,7 +143,7 @@ export default function Tracker() {
                 {data.by_event.map((e) => (
                   <tr key={e.event_name} className="border-t border-slate-50">
                     <td className="py-1.5">{eventLabel(e.event_name)}</td>
-                    <td className="py-1.5 text-right">{e.count.toLocaleString("pl-PL")}</td>
+                    <td className="py-1.5 text-right">{e.count.toLocaleString(locale)}</td>
                     <td className="py-1.5 text-right text-slate-400">
                       {((e.count / totalByEvent) * 100).toFixed(1)}%
                     </td>
@@ -155,13 +157,13 @@ export default function Tracker() {
 
       {/* Top URLs */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Najpopularniejsze adresy URL</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Najpopularniejsze adresy URL", "Top URLs")}</h3>
         <div className="overflow-auto max-h-96">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="text-left text-slate-500 border-b border-slate-200">
                 <th className="pb-2">URL</th>
-                <th className="pb-2 text-right">Zdarzenia</th>
+                <th className="pb-2 text-right">{t("Zdarzenia", "Events")}</th>
                 <th className="pb-2 text-right">%</th>
               </tr>
             </thead>
@@ -169,7 +171,7 @@ export default function Tracker() {
               {data.top_urls.map((u, i) => (
                 <tr key={`${u.url}-${i}`} className="border-t border-slate-50">
                   <td className="py-1.5 font-mono text-xs truncate max-w-md" title={u.url}>{u.url}</td>
-                  <td className="py-1.5 text-right">{u.count.toLocaleString("pl-PL")}</td>
+                  <td className="py-1.5 text-right">{u.count.toLocaleString(locale)}</td>
                   <td className="py-1.5 text-right text-slate-400">
                     {((u.count / totalByUrl) * 100).toFixed(1)}%
                   </td>
@@ -177,7 +179,7 @@ export default function Tracker() {
               ))}
               {data.top_urls.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="py-4 text-center text-slate-400">Brak danych</td>
+                  <td colSpan={3} className="py-4 text-center text-slate-400">{t("Brak danych", "No data")}</td>
                 </tr>
               )}
             </tbody>

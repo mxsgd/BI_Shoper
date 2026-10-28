@@ -4,6 +4,7 @@ import {
 } from "recharts";
 import { api } from "../api";
 import type { CohortData, RfmData } from "../api";
+import { t, lang, locale } from "../i18n";
 
 const SEGMENT_COLORS: Record<string, string> = {
   "Mistrzowie": "#10b981",
@@ -13,6 +14,17 @@ const SEGMENT_COLORS: Record<string, string> = {
   "Utraceni": "#ef4444",
   "Inni": "#94a3b8",
 };
+
+// Segment names come from the backend in Polish (rfm.py), so translate them for display only.
+const SEGMENT_EN: Record<string, string> = {
+  "Mistrzowie": "Champions",
+  "Lojalni": "Loyal",
+  "Nowi klienci": "New customers",
+  "Zagrożeni": "At risk",
+  "Utraceni": "Lost",
+  "Inni": "Others",
+};
+const segmentLabel = (name: string) => (lang === "pl" ? name : SEGMENT_EN[name] ?? name);
 
 export default function Retention() {
   const [cohortData, setCohortData] = useState<CohortData | null>(null);
@@ -27,27 +39,27 @@ export default function Retention() {
   }, []);
 
   if (loading) return <Loader />;
-  if (!cohortData || !rfmData) return <p>Brak danych</p>;
+  if (!cohortData || !rfmData) return <p>{t("Brak danych", "No data")}</p>;
 
   const maxOffset = Math.max(0, ...cohortData.cohorts.flatMap((c) => c.months.map((m) => m.month_offset)));
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-1">Retencja i segmentacja</h2>
-      <p className="text-sm text-slate-500 mb-6">Analiza kohortowa, RFM i wartość życiowa klienta</p>
+      <h2 className="text-2xl font-bold mb-1">{t("Retencja i segmentacja", "Retention and segmentation")}</h2>
+      <p className="text-sm text-slate-500 mb-6">{t("Analiza kohortowa, RFM i wartość życiowa klienta", "Cohort analysis, RFM and customer lifetime value")}</p>
 
       {/* CLV Summary Cards */}
       {rfmData.summary.total_customers > 0 && (
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-          <SummaryCard title="Klienci (z zamówieniami)" value={rfmData.summary.total_customers.toLocaleString("pl-PL")} />
-          <SummaryCard title="Śr. CLV" value={`${rfmData.summary.avg_clv.toLocaleString("pl-PL")} zł`} />
-          <SummaryCard title="Łączny przychód" value={`${rfmData.summary.total_revenue.toLocaleString("pl-PL")} zł`} />
+          <SummaryCard title={t("Klienci (z zamówieniami)", "Customers (with orders)")} value={rfmData.summary.total_customers.toLocaleString(locale)} />
+          <SummaryCard title={t("Śr. CLV", "Avg. CLV")} value={`${rfmData.summary.avg_clv.toLocaleString(locale)} zł`} />
+          <SummaryCard title={t("Łączny przychód", "Total revenue")} value={`${rfmData.summary.total_revenue.toLocaleString(locale)} zł`} />
         </div>
       )}
 
       {/* RFM Segment Cards */}
       <div className="mb-8">
-        <h3 className="text-lg font-semibold mb-4">Segmenty RFM</h3>
+        <h3 className="text-lg font-semibold mb-4">{t("Segmenty RFM", "RFM segments")}</h3>
         <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
           {rfmData.segments.map((seg) => (
             <div
@@ -55,12 +67,12 @@ export default function Retention() {
               className="rounded-xl p-4 border shadow-sm"
               style={{ borderLeftWidth: 4, borderLeftColor: SEGMENT_COLORS[seg.name] || "#94a3b8" }}
             >
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{seg.name}</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{segmentLabel(seg.name)}</p>
               <p className="text-2xl font-bold mt-1">{seg.count}</p>
               <div className="mt-2 space-y-0.5 text-xs text-slate-500">
-                <p>Śr. przychód: <span className="font-medium text-slate-700">{seg.avg_revenue.toLocaleString("pl-PL")} zł</span></p>
-                <p>Śr. zamówienia: <span className="font-medium text-slate-700">{seg.avg_orders}</span></p>
-                <p>Śr. recencja: <span className="font-medium text-slate-700">{seg.avg_recency_days} dni</span></p>
+                <p>{t("Śr. przychód", "Avg. revenue")}: <span className="font-medium text-slate-700">{seg.avg_revenue.toLocaleString(locale)} zł</span></p>
+                <p>{t("Śr. zamówienia", "Avg. orders")}: <span className="font-medium text-slate-700">{seg.avg_orders}</span></p>
+                <p>{t("Śr. recencja", "Avg. recency")}: <span className="font-medium text-slate-700">{seg.avg_recency_days} {t("dni", "days")}</span></p>
               </div>
             </div>
           ))}
@@ -69,14 +81,14 @@ export default function Retention() {
 
       {/* RFM Segment Chart */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-8">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Rozkład segmentów</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-4">{t("Rozkład segmentów", "Segment distribution")}</h3>
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={rfmData.segments} layout="vertical">
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis type="number" tick={{ fontSize: 11 }} />
-            <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={110} />
-            <Tooltip formatter={(v) => Number(v ?? 0).toLocaleString("pl-PL")} />
-            <Bar dataKey="count" name="Liczba klientów" radius={[0, 4, 4, 0]}>
+            <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={110} tickFormatter={segmentLabel} />
+            <Tooltip formatter={(v) => Number(v ?? 0).toLocaleString(locale)} labelFormatter={(l) => segmentLabel(String(l))} />
+            <Bar dataKey="count" name={t("Liczba klientów", "Customers")} radius={[0, 4, 4, 0]}>
               {rfmData.segments.map((seg) => (
                 <Cell key={seg.name} fill={SEGMENT_COLORS[seg.name] || "#94a3b8"} />
               ))}
@@ -88,13 +100,13 @@ export default function Retention() {
       {/* Cohort Retention Heatmap */}
       {cohortData.cohorts.length > 0 && (
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Macierz retencji kohortowej</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-4">{t("Macierz retencji kohortowej", "Cohort retention matrix")}</h3>
           <div className="overflow-x-auto">
             <table className="text-xs w-full">
               <thead>
                 <tr>
-                  <th className="text-left py-2 px-2 text-slate-500 font-medium">Kohorta</th>
-                  <th className="text-center py-2 px-1 text-slate-500 font-medium">Rozmiar</th>
+                  <th className="text-left py-2 px-2 text-slate-500 font-medium">{t("Kohorta", "Cohort")}</th>
+                  <th className="text-center py-2 px-1 text-slate-500 font-medium">{t("Rozmiar", "Size")}</th>
                   {Array.from({ length: Math.min(maxOffset + 1, 13) }, (_, i) => (
                     <th key={i} className="text-center py-2 px-1 text-slate-500 font-medium">M{i}</th>
                   ))}
@@ -130,7 +142,7 @@ export default function Retention() {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-slate-400 mt-3">M0 = miesiąc pierwszego zakupu. Wartości pokazują % klientów z kohorty, którzy dokonali zakupu w danym miesiącu.</p>
+          <p className="text-xs text-slate-400 mt-3">{t("M0 = miesiąc pierwszego zakupu. Wartości pokazują % klientów z kohorty, którzy dokonali zakupu w danym miesiącu.", "M0 = month of first purchase. Values show the % of the cohort that bought in that month.")}</p>
         </div>
       )}
     </div>

@@ -7,6 +7,7 @@ import { api } from "../api";
 import type { OverviewData, RevenueData, TrafficData, TrackerEventSummary } from "../api";
 import { FocusBanner } from "../components/FocusBanner";
 import { LineHitDot } from "../components/ChartHitDot";
+import { t, locale } from "../i18n";
 
 function KpiCard({ title, value, delta, prefix = "", suffix = "", deltaHint }: {
   title: string; value: string | number; delta: number | null; prefix?: string; suffix?: string;
@@ -14,11 +15,11 @@ function KpiCard({ title, value, delta, prefix = "", suffix = "", deltaHint }: {
 }) {
   const color = delta === null ? "text-slate-400" : delta >= 0 ? "text-emerald-600" : "text-red-500";
   const arrow = delta === null ? "" : delta >= 0 ? "\u2191" : "\u2193";
-  const deltaLabel = deltaHint ?? "vs poprzedni okres";
+  const deltaLabel = deltaHint ?? t("vs poprzedni okres", "vs previous period");
   return (
     <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
       <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">{title}</p>
-      <p className="text-2xl font-bold mt-1">{prefix}{typeof value === "number" ? value.toLocaleString("pl-PL") : value}{suffix}</p>
+      <p className="text-2xl font-bold mt-1">{prefix}{typeof value === "number" ? value.toLocaleString(locale) : value}{suffix}</p>
       {delta !== null && (
         <p className={`text-sm mt-1 font-medium ${color}`}>
           {arrow} {Math.abs(delta)}% {deltaLabel}
@@ -68,7 +69,7 @@ export default function Dashboard() {
   }, [period, selectedDate]);
 
   if (loading && !revenue) return <Loader />;
-  if (!overview || !revenue) return <p>Brak danych</p>;
+  if (!overview || !revenue) return <p>{t("Brak danych", "No data")}</p>;
 
   return (
     <div>
@@ -78,7 +79,7 @@ export default function Dashboard() {
           <p className="text-sm text-slate-500">
             {overview.date_from} — {overview.date_to}
             {selectedDate ? (
-              <span className="ml-2 text-indigo-600 font-medium">· KPI i tabele: wybrany dzień</span>
+              <span className="ml-2 text-indigo-600 font-medium">{t("· KPI i tabele: wybrany dzień", "· KPIs and tables: selected day")}</span>
             ) : null}
           </p>
         </div>
@@ -88,32 +89,32 @@ export default function Dashboard() {
       <FocusBanner
         selectedDate={selectedDate}
         onClear={clearSelection}
-        subtitle="KPI i metryki GA4 dotyczą wybranej daty."
+        subtitle={t("KPI i metryki GA4 dotyczą wybranej daty.", "KPIs and GA4 metrics refer to the selected date.")}
       />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KpiCard title="Przychód" value={overview.revenue} delta={overview.revenue_delta_pct} suffix=" zł" deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
-        <KpiCard title="Zamówienia" value={overview.orders} delta={overview.orders_delta_pct} deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
-        <KpiCard title="Śr. wartość (AOV)" value={overview.aov} delta={overview.aov_delta_pct} suffix=" zł" deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
-        <KpiCard title="Klienci" value={overview.customers} delta={overview.customers_delta_pct} deltaHint={overview.focus_date ? "vs poprzedni dzień" : undefined} />
+        <KpiCard title={t("Przychód", "Revenue")} value={overview.revenue} delta={overview.revenue_delta_pct} suffix=" zł" deltaHint={overview.focus_date ? t("vs poprzedni dzień", "vs previous day") : undefined} />
+        <KpiCard title={t("Zamówienia", "Orders")} value={overview.orders} delta={overview.orders_delta_pct} deltaHint={overview.focus_date ? t("vs poprzedni dzień", "vs previous day") : undefined} />
+        <KpiCard title={t("Śr. wartość (AOV)", "Avg. order value (AOV)")} value={overview.aov} delta={overview.aov_delta_pct} suffix=" zł" deltaHint={overview.focus_date ? t("vs poprzedni dzień", "vs previous day") : undefined} />
+        <KpiCard title={t("Klienci", "Customers")} value={overview.customers} delta={overview.customers_delta_pct} deltaHint={overview.focus_date ? t("vs poprzedni dzień", "vs previous day") : undefined} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-1">Przychód w czasie</h3>
-          <p className="text-xs text-slate-400 mb-3">Kliknij linię przychodu lub słupek zamówień, aby zawęzić tabele poniżej (bez przeładowania wykresu).</p>
+          <h3 className="text-sm font-semibold text-slate-700 mb-1">{t("Przychód w czasie", "Revenue over time")}</h3>
+          <p className="text-xs text-slate-400 mb-3">{t("Kliknij linię przychodu lub słupek zamówień, aby zawęzić tabele poniżej (bez przeładowania wykresu).", "Click the revenue line or an orders bar to narrow the tables below.")}</p>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={revenue.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString("pl-PL")} zł`} />
+              <Tooltip formatter={(v) => `${Number(v ?? 0).toLocaleString(locale)} zł`} />
               <Line
                 type="monotone"
                 dataKey="revenue"
                 stroke="#6366f1"
                 strokeWidth={2}
-                name="Przychód"
+                name={t("Przychód", "Revenue")}
                 dot={(props) => LineHitDot(props, selectedDate, toggleDate)}
                 activeDot={false}
                 isAnimationActive={false}
@@ -123,7 +124,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-4">Zamówienia / dzień</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-4">{t("Zamówienia / dzień", "Orders / day")}</h3>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={revenue.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -133,7 +134,7 @@ export default function Dashboard() {
               <Bar
                 dataKey="orders"
                 radius={[4, 4, 0, 0]}
-                name="Zamówienia"
+                name={t("Zamówienia", "Orders")}
                 onClick={(item: { payload?: { date?: string } }) => {
                   const dt = item?.payload?.date;
                   if (typeof dt === "string") toggleDate(dt);
@@ -154,23 +155,23 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Dodatkowe KPI</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Dodatkowe KPI", "More KPIs")}</h3>
           <div className="space-y-3 text-sm">
-            <div className="flex justify-between"><span className="text-slate-500">Śr. produktów/zamówienie</span><span className="font-medium">{overview.avg_items_per_order}</span></div>
-            <div className="flex justify-between"><span className="text-slate-500">% opłaconych</span><span className="font-medium">{overview.paid_pct}%</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">{t("Śr. produktów/zamówienie", "Avg. items/order")}</span><span className="font-medium">{overview.avg_items_per_order}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">{t("% opłaconych", "% paid")}</span><span className="font-medium">{overview.paid_pct}%</span></div>
             {trafficData?.has_data && trafficData.conversion && (
               <>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Konwersja (GA4)</span>
+                  <span className="text-slate-500">{t("Konwersja (GA4)", "Conversion (GA4)")}</span>
                   <span className="font-medium text-indigo-600">{trafficData.conversion.conversion_rate}%</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Sesje (GA4)</span>
-                  <span className="font-medium">{trafficData.conversion.sessions.toLocaleString("pl-PL")}</span>
+                  <span className="text-slate-500">{t("Sesje (GA4)", "Sessions (GA4)")}</span>
+                  <span className="font-medium">{trafficData.conversion.sessions.toLocaleString(locale)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Przychód/sesja</span>
-                  <span className="font-medium">{trafficData.conversion.revenue_per_session.toLocaleString("pl-PL")} zł</span>
+                  <span className="text-slate-500">{t("Przychód/sesja", "Revenue/session")}</span>
+                  <span className="font-medium">{trafficData.conversion.revenue_per_session.toLocaleString(locale)} zł</span>
                 </div>
               </>
             )}
@@ -178,26 +179,26 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Tracker (ostatnie 7 dni)</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Tracker (ostatnie 7 dni)", "Tracker (last 7 days)")}</h3>
           {tracker && tracker.total_events > 0 ? (
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-500">Wszystkie eventy</span>
-                <span className="font-medium">{tracker.total_events.toLocaleString("pl-PL")}</span>
+                <span className="text-slate-500">{t("Wszystkie eventy", "All events")}</span>
+                <span className="font-medium">{tracker.total_events.toLocaleString(locale)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Unikalni użytkownicy</span>
-                <span className="font-medium">{tracker.distinct_users.toLocaleString("pl-PL")}</span>
+                <span className="text-slate-500">{t("Unikalni użytkownicy", "Unique users")}</span>
+                <span className="font-medium">{tracker.distinct_users.toLocaleString(locale)}</span>
               </div>
               {tracker.by_event.slice(0, 3).map((e) => (
                 <div key={e.event_name} className="flex justify-between">
                   <span className="text-slate-500 truncate max-w-[60%]" title={e.event_name}>{e.event_name}</span>
-                  <span className="font-medium">{e.count.toLocaleString("pl-PL")}</span>
+                  <span className="font-medium">{e.count.toLocaleString(locale)}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-slate-400">Brak eventów trackera w ostatnich 7 dniach.</p>
+            <p className="text-sm text-slate-400">{t("Brak eventów trackera w ostatnich 7 dniach.", "No tracker events in the last 7 days.")}</p>
           )}
         </div>
       </div>

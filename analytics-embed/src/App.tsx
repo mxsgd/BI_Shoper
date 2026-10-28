@@ -17,20 +17,21 @@ import { useGtagConfig } from "./useGtagConfig";
 import { api } from "./api";
 import { STATIC_DEMO, getManifest } from "./staticDemo";
 import type { DemoManifest } from "./staticDemo";
+import { lang, setLang, t } from "./i18n";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1" },
-  { to: "/orders", label: "Zamówienia", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
-  { to: "/products", label: "Produkty", icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" },
-  { to: "/customers", label: "Klienci", icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" },
-  { to: "/trends", label: "Trendy", icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" },
-  { to: "/retention", label: "Retencja", icon: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" },
-  { to: "/traffic", label: "Ruch", icon: "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { to: "/orders", label: t("Zamówienia", "Orders"), icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
+  { to: "/products", label: t("Produkty", "Products"), icon: "M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" },
+  { to: "/customers", label: t("Klienci", "Customers"), icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" },
+  { to: "/trends", label: t("Trendy", "Trends"), icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" },
+  { to: "/retention", label: t("Retencja", "Retention"), icon: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" },
+  { to: "/traffic", label: t("Ruch", "Traffic"), icon: "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
   { to: "/tracker", label: "Tracker", icon: "M13 10V3L4 14h7v7l9-11h-7z" },
-  { to: "/cart", label: "Koszyk", icon: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" },
-  { to: "/price-update", label: "Aktualizacja cen", icon: "M12 4v16m8-8H4" },
-  { to: "/variant-codes", label: "Kody wariantów", icon: "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" },
-  { to: "/settings", label: "Ustawienia", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
+  { to: "/cart", label: t("Koszyk", "Cart"), icon: "M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" },
+  { to: "/price-update", label: t("Aktualizacja cen", "Price update"), icon: "M12 4v16m8-8H4" },
+  { to: "/variant-codes", label: t("Kody wariantów", "Variant codes"), icon: "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" },
+  { to: "/settings", label: t("Ustawienia", "Settings"), icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 11-6 0 3 3 0 016 0z" },
 ];
 
 // Write features need a live backend and store credentials, so the static demo leaves them out.
@@ -44,9 +45,16 @@ function DemoBanner() {
   }, []);
   return (
     <div className="mb-6 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm text-indigo-900">
-      <strong>Static demo.</strong> Synthetic store data{manifest ? `, frozen ${manifest.generated_at.slice(0, 10)}` : ""}.
-      Period filters and day-click work; live sync and write features are disabled.{" "}
-      <a className="underline" href="https://github.com/mxsgd/BI_Shoper" target="_blank" rel="noreferrer">Source on GitHub</a>
+      <strong>{t("Demo statyczne.", "Static demo.")}</strong>{" "}
+      {t("Syntetyczne dane sklepu", "Synthetic store data")}
+      {manifest ? `, ${t("zamrożone", "frozen")} ${manifest.generated_at.slice(0, 10)}` : ""}.{" "}
+      {t(
+        "Filtry okresu i klikanie dni działają; synchronizacja i funkcje zapisu są wyłączone.",
+        "Period filters and day-click work; live sync and write features are disabled.",
+      )}{" "}
+      <a className="underline" href="https://github.com/mxsgd/BI_Shoper" target="_blank" rel="noreferrer">
+        {t("Kod na GitHubie", "Source on GitHub")}
+      </a>
     </div>
   );
 }
@@ -113,7 +121,7 @@ function Sidebar() {
       await api.syncNow(scope);
       // Sync started in background — polling will detect when it finishes
     } catch (e) {
-      setRefreshError(e instanceof Error ? e.message : "Nie udało się odświeżyć danych.");
+      setRefreshError(e instanceof Error ? e.message : t("Nie udało się odświeżyć danych.", "Could not refresh data."));
       setIsRefreshing(false);
     }
   }
@@ -124,7 +132,7 @@ function Sidebar() {
         <div className="flex items-center justify-between gap-2">
           <div>
             <h1 className="text-lg font-bold tracking-tight">BI Shoper</h1>
-            <p className="text-xs text-slate-400 mt-0.5">Analityka sklepu</p>
+            <p className="text-xs text-slate-400 mt-0.5">{t("Analityka sklepu", "Store analytics")}</p>
           </div>
           {!STATIC_DEMO && (
           <div className="relative">
@@ -134,7 +142,7 @@ function Sidebar() {
                 onClick={() => void handleRefresh("quick")}
                 disabled={isRefreshing}
                 className="inline-flex items-center gap-1 rounded-l-md border border-slate-600 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                title="Szybkie odświeżenie — zamówienia + GA4 + transform"
+                title={t("Szybkie odświeżenie — zamówienia + GA4 + transform", "Quick refresh: orders + GA4 + transform")}
               >
                 {isRefreshing ? (
                   <>
@@ -143,14 +151,14 @@ function Sidebar() {
                     </svg>
                     Sync...
                   </>
-                ) : "Odśwież"}
+                ) : t("Odśwież", "Refresh")}
               </button>
               <button
                 type="button"
                 onClick={() => setShowFullSync((v) => !v)}
                 disabled={isRefreshing}
                 className="inline-flex items-center rounded-r-md border border-l-0 border-slate-600 px-1 py-1 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                title="Więcej opcji synchronizacji"
+                title={t("Więcej opcji synchronizacji", "More sync options")}
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -160,23 +168,23 @@ function Sidebar() {
             {showFullSync && !isRefreshing && (
               <div className="absolute right-0 top-full mt-1 z-20 bg-slate-800 border border-slate-600 rounded-lg shadow-xl w-52 py-1 text-[11px]">
                 <div className="px-3 py-1.5 text-slate-400 font-semibold uppercase tracking-wide text-[10px]">
-                  Synchronizacja
+                  {t("Synchronizacja", "Sync")}
                 </div>
                 <button
                   type="button"
                   onClick={() => void handleRefresh("quick")}
                   className="w-full text-left px-3 py-2 text-slate-200 hover:bg-slate-700 transition-colors"
                 >
-                  <p className="font-medium">Szybka (zamówienia + GA4)</p>
-                  <p className="text-slate-400 text-[10px] mt-0.5">Nowe zamówienia, ruch GA4, transform — zwykle do 2 min</p>
+                  <p className="font-medium">{t("Szybka (zamówienia + GA4)", "Quick (orders + GA4)")}</p>
+                  <p className="text-slate-400 text-[10px] mt-0.5">{t("Nowe zamówienia, ruch GA4, transform — zwykle do 2 min", "New orders, GA4 traffic, transform; usually under 2 min")}</p>
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleRefresh("all")}
                   className="w-full text-left px-3 py-2 text-slate-200 hover:bg-slate-700 transition-colors"
                 >
-                  <p className="font-medium">Pełna synchronizacja</p>
-                  <p className="text-slate-400 text-[10px] mt-0.5">Wszystko od nowa — może trwać kilka minut</p>
+                  <p className="font-medium">{t("Pełna synchronizacja", "Full sync")}</p>
+                  <p className="text-slate-400 text-[10px] mt-0.5">{t("Wszystko od nowa — może trwać kilka minut", "Everything from scratch; can take a few minutes")}</p>
                 </button>
               </div>
             )}
@@ -186,9 +194,9 @@ function Sidebar() {
         {refreshError ? (
           <p className="mt-2 text-[11px] text-rose-300">{refreshError}</p>
         ) : syncDone ? (
-          <p className="mt-2 text-[11px] text-emerald-400">Synchronizacja zakończona ✓</p>
+          <p className="mt-2 text-[11px] text-emerald-400">{t("Synchronizacja zakończona ✓", "Sync finished ✓")}</p>
         ) : isRefreshing ? (
-          <p className="mt-2 text-[11px] text-slate-400">Synchronizacja (zamówienia + GA4)…</p>
+          <p className="mt-2 text-[11px] text-slate-400">{t("Synchronizacja (zamówienia + GA4)…", "Syncing (orders + GA4)…")}</p>
         ) : null}
       </div>
       <nav className="flex-1 py-4 space-y-1 px-3">
@@ -211,8 +219,23 @@ function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="px-5 py-4 border-t border-slate-700 text-xs text-slate-500">
-        {STATIC_DEMO ? "Demo Store" : "MK-FOAM"} &middot; v0.1
+      <div className="flex items-center justify-between px-5 py-4 border-t border-slate-700 text-xs text-slate-500">
+        <span>{STATIC_DEMO ? "Demo Store" : "MK-FOAM"} &middot; v0.1</span>
+        <div className="flex gap-1" role="group" aria-label="Language">
+          {(["en", "pl"] as const).map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => l !== lang && setLang(l)}
+              aria-pressed={lang === l}
+              className={`rounded px-1.5 py-0.5 uppercase transition-colors ${
+                lang === l ? "bg-slate-700 text-white" : "hover:text-slate-200"
+              }`}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
       </div>
     </aside>
   );
