@@ -7,6 +7,7 @@ import { api } from "../api";
 import type { TrafficData } from "../api";
 import { FocusBanner } from "../components/FocusBanner";
 import { LineHitDot } from "../components/ChartHitDot";
+import { t, lang, locale } from "../i18n";
 
 const DEVICE_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"];
 
@@ -53,21 +54,31 @@ export default function Traffic() {
   }, [period, selectedDate]);
 
   if (loading && !data) return <Loader />;
-  if (!data) return <p>Brak danych</p>;
+  if (!data) return <p>{t("Brak danych", "No data")}</p>;
 
   if (!data.has_data) {
     return (
       <div>
-        <h2 className="text-2xl font-bold mb-1">Ruch na stronie</h2>
+        <h2 className="text-2xl font-bold mb-1">{t("Ruch na stronie", "Site traffic")}</h2>
         <div className="mt-8 bg-amber-50 border border-amber-200 rounded-xl p-6 text-center">
-          <p className="text-amber-800 font-medium">Brak danych GA4 w wybranym okresie</p>
+          <p className="text-amber-800 font-medium">{t("Brak danych GA4 w wybranym okresie", "No GA4 data in the selected period")}</p>
           <p className="text-sm text-amber-600 mt-1">
-            Ustaw GA4_PROPERTY_ID i GA4_CREDENTIALS_PATH w backend/.env, zainstaluj{" "}
-            <code className="text-xs">google-analytics-data</code> w venv, a następnie kliknij „Odśwież”
-            (szybkie odświeżenie pobiera też dane GA4).
+            {lang === "pl" ? (
+              <>
+                Ustaw GA4_PROPERTY_ID i GA4_CREDENTIALS_PATH w backend/.env, zainstaluj{" "}
+                <code className="text-xs">google-analytics-data</code> w venv, a następnie kliknij „Odśwież”
+                (szybkie odświeżenie pobiera też dane GA4).
+              </>
+            ) : (
+              <>
+                Set GA4_PROPERTY_ID and GA4_CREDENTIALS_PATH in backend/.env, install{" "}
+                <code className="text-xs">google-analytics-data</code> in the venv, then click “Refresh”
+                (a quick refresh pulls GA4 data too).
+              </>
+            )}
           </p>
           {data.data_through && (
-            <p className="text-xs text-amber-500 mt-2">Ostatnie dane w bazie: {data.data_through}</p>
+            <p className="text-xs text-amber-500 mt-2">{t("Ostatnie dane w bazie", "Latest data in the database")}: {data.data_through}</p>
           )}
         </div>
       </div>
@@ -86,11 +97,11 @@ export default function Traffic() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold">Ruch na stronie</h2>
+          <h2 className="text-2xl font-bold">{t("Ruch na stronie", "Site traffic")}</h2>
           <p className="text-sm text-slate-500">
-            Dane z Google Analytics 4 + konwersja Shoper
+            {t("Dane z Google Analytics 4 + konwersja Shoper", "Google Analytics 4 data + Shoper conversion")}
             {data.data_through && (
-              <span className="text-slate-400"> · dane do {data.data_through}</span>
+              <span className="text-slate-400"> · {t("dane do", "data through")} {data.data_through}</span>
             )}
           </p>
         </div>
@@ -99,45 +110,46 @@ export default function Traffic() {
 
       {dataStale && (
         <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-          Dane GA4 są nieaktualne (ostatni dzień: {data.data_through}). Kliknij „Odśwież” w menu —
-          szybkie odświeżenie pobiera też ruch z GA4.
+          {lang === "pl"
+            ? `Dane GA4 są nieaktualne (ostatni dzień: ${data.data_through}). Kliknij „Odśwież” w menu — szybkie odświeżenie pobiera też ruch z GA4.`
+            : `GA4 data is stale (last day: ${data.data_through}). Click “Refresh” in the menu; a quick refresh pulls GA4 traffic too.`}
         </div>
       )}
 
       <FocusBanner
         selectedDate={selectedDate}
         onClear={clearSelection}
-        subtitle="KPI, lejek, źródła ruchu i tabele dotyczą wybranej daty."
+        subtitle={t("KPI, lejek, źródła ruchu i tabele dotyczą wybranej daty.", "KPIs, funnel, sources and tables refer to the selected date.")}
       />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        <KpiCard title="Sesje" value={ov.sessions.toLocaleString("pl-PL")} />
-        <KpiCard title="Użytkownicy" value={ov.users.toLocaleString("pl-PL")} />
+        <KpiCard title={t("Sesje", "Sessions")} value={ov.sessions.toLocaleString(locale)} />
+        <KpiCard title={t("Użytkownicy", "Users")} value={ov.users.toLocaleString(locale)} />
         <KpiCard title="Bounce Rate" value={`${(ov.bounce_rate * 100).toFixed(1)}%`} />
-        <KpiCard title="Śr. czas sesji" value={formatDuration(ov.avg_session_duration)} />
-        <KpiCard title="Konwersja" value={`${conv.conversion_rate}%`} accent />
+        <KpiCard title={t("Śr. czas sesji", "Avg. session time")} value={formatDuration(ov.avg_session_duration)} />
+        <KpiCard title={t("Konwersja", "Conversion")} value={`${conv.conversion_rate}%`} accent />
       </div>
 
       {/* Simple Conversion Funnel */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Lejek konwersji (sesje → zamówienia)</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-4">{t("Lejek konwersji (sesje → zamówienia)", "Conversion funnel (sessions → orders)")}</h3>
         <div className="flex items-center gap-3">
-          <FunnelStep label="Sesje" value={conv.sessions} pct={100} />
+          <FunnelStep label={t("Sesje", "Sessions")} value={conv.sessions} pct={100} />
           <Arrow />
-          <FunnelStep label="Zamówienia" value={conv.orders} pct={conv.conversion_rate} />
+          <FunnelStep label={t("Zamówienia", "Orders")} value={conv.orders} pct={conv.conversion_rate} />
           <Arrow />
-          <FunnelStep label="Przychód" value={`${conv.revenue.toLocaleString("pl-PL")} zł`} pct={null} />
+          <FunnelStep label={t("Przychód", "Revenue")} value={`${conv.revenue.toLocaleString(locale)} zł`} pct={null} />
           <div className="ml-auto text-sm text-slate-500">
-            Przychód/sesja: <span className="font-semibold text-slate-800">{conv.revenue_per_session.toLocaleString("pl-PL")} zł</span>
+            {t("Przychód/sesja", "Revenue/session")}: <span className="font-semibold text-slate-800">{conv.revenue_per_session.toLocaleString(locale)} zł</span>
           </div>
         </div>
       </div>
 
       {/* Sessions vs Orders Chart */}
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-1">Sesje vs Zamówienia</h3>
-        <p className="text-xs text-slate-400 mb-3">Kliknij linię „Sesje” przy wybranym dniu, aby zawęzić metryki i tabele.</p>
+        <h3 className="text-sm font-semibold text-slate-700 mb-1">{t("Sesje vs Zamówienia", "Sessions vs orders")}</h3>
+        <p className="text-xs text-slate-400 mb-3">{t("Kliknij linię „Sesje” przy wybranym dniu, aby zawęzić metryki i tabele.", "Click the Sessions line on a day to narrow metrics and tables.")}</p>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={data.time_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -152,7 +164,7 @@ export default function Traffic() {
               dataKey="sessions"
               stroke="#6366f1"
               strokeWidth={2}
-              name="Sesje"
+              name={t("Sesje", "Sessions")}
               dot={(props) => LineHitDot(props, selectedDate, toggleDate)}
               activeDot={false}
               isAnimationActive={false}
@@ -163,7 +175,7 @@ export default function Traffic() {
               dataKey="orders"
               stroke="#10b981"
               strokeWidth={2}
-              name="Zamówienia"
+              name={t("Zamówienia", "Orders")}
               dot={false}
               isAnimationActive={false}
             />
@@ -174,15 +186,15 @@ export default function Traffic() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* Geographic */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Geografia</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Geografia", "Geography")}</h3>
           <div className="overflow-auto max-h-64">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="text-left text-slate-500 border-b border-slate-200">
-                  <th className="pb-2">Kraj</th>
-                  <th className="pb-2">Miasto</th>
-                  <th className="pb-2 text-right">Sesje</th>
-                  <th className="pb-2 text-right">Użytk.</th>
+                  <th className="pb-2">{t("Kraj", "Country")}</th>
+                  <th className="pb-2">{t("Miasto", "City")}</th>
+                  <th className="pb-2 text-right">{t("Sesje", "Sessions")}</th>
+                  <th className="pb-2 text-right">{t("Użytk.", "Users")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -190,8 +202,8 @@ export default function Traffic() {
                   <tr key={i} className="border-t border-slate-50">
                     <td className="py-1.5">{g.country}</td>
                     <td className="py-1.5 text-slate-600">{g.city}</td>
-                    <td className="py-1.5 text-right">{g.sessions.toLocaleString("pl-PL")}</td>
-                    <td className="py-1.5 text-right">{g.users.toLocaleString("pl-PL")}</td>
+                    <td className="py-1.5 text-right">{g.sessions.toLocaleString(locale)}</td>
+                    <td className="py-1.5 text-right">{g.users.toLocaleString(locale)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -201,7 +213,7 @@ export default function Traffic() {
 
         {/* Device Split */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Urządzenia</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Urządzenia", "Devices")}</h3>
           {data.devices.length > 0 ? (
             <div className="overflow-visible">
               <ResponsiveContainer width="100%" height={280}>
@@ -224,7 +236,7 @@ export default function Traffic() {
                     formatter={(v, _name, item) => {
                       const d = item.payload as { device_category: string; pct: number };
                       return [
-                        `${Number(v ?? 0).toLocaleString("pl-PL")} sesji (${d.pct}%)`,
+                        `${Number(v ?? 0).toLocaleString(locale)} ${t("sesji", "sessions")} (${d.pct}%)`,
                         deviceLabel(d.device_category),
                       ];
                     }}
@@ -242,7 +254,7 @@ export default function Traffic() {
               </ResponsiveContainer>
             </div>
           ) : (
-            <p className="text-sm text-slate-400">Brak danych</p>
+            <p className="text-sm text-slate-400">{t("Brak danych", "No data")}</p>
           )}
         </div>
       </div>
@@ -250,15 +262,15 @@ export default function Traffic() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         {/* Traffic Sources */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Źródła ruchu</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Źródła ruchu", "Traffic sources")}</h3>
           <div className="overflow-auto max-h-72">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="text-left text-slate-500 border-b border-slate-200">
-                  <th className="pb-2">Źródło / Medium</th>
-                  <th className="pb-2 text-right">Sesje</th>
-                  <th className="pb-2 text-right">Użytk.</th>
-                  <th className="pb-2 text-right">Konw.</th>
+                  <th className="pb-2">{t("Źródło / Medium", "Source / Medium")}</th>
+                  <th className="pb-2 text-right">{t("Sesje", "Sessions")}</th>
+                  <th className="pb-2 text-right">{t("Użytk.", "Users")}</th>
+                  <th className="pb-2 text-right">{t("Konw.", "Conv.")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -268,8 +280,8 @@ export default function Traffic() {
                       <span className="font-medium">{s.source}</span>
                       <span className="text-slate-400"> / {s.medium}</span>
                     </td>
-                    <td className="py-1.5 text-right">{s.sessions.toLocaleString("pl-PL")}</td>
-                    <td className="py-1.5 text-right">{s.users.toLocaleString("pl-PL")}</td>
+                    <td className="py-1.5 text-right">{s.sessions.toLocaleString(locale)}</td>
+                    <td className="py-1.5 text-right">{s.users.toLocaleString(locale)}</td>
                     <td className="py-1.5 text-right">{s.conversions}</td>
                   </tr>
                 ))}
@@ -280,22 +292,22 @@ export default function Traffic() {
 
         {/* Top Pages */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Najpopularniejsze strony</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Najpopularniejsze strony", "Top pages")}</h3>
           <div className="overflow-auto max-h-72">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="text-left text-slate-500 border-b border-slate-200">
-                  <th className="pb-2">Ścieżka</th>
-                  <th className="pb-2 text-right">Wyśw.</th>
-                  <th className="pb-2 text-right">Śr. czas</th>
-                  <th className="pb-2 text-right">Wejścia</th>
+                  <th className="pb-2">{t("Ścieżka", "Path")}</th>
+                  <th className="pb-2 text-right">{t("Wyśw.", "Views")}</th>
+                  <th className="pb-2 text-right">{t("Śr. czas", "Avg. time")}</th>
+                  <th className="pb-2 text-right">{t("Wejścia", "Entrances")}</th>
                 </tr>
               </thead>
               <tbody>
                 {data.top_pages.map((p) => (
                   <tr key={p.page_path} className="border-t border-slate-50">
                     <td className="py-1.5 font-mono text-xs truncate max-w-48" title={p.page_path}>{p.page_path}</td>
-                    <td className="py-1.5 text-right">{p.views.toLocaleString("pl-PL")}</td>
+                    <td className="py-1.5 text-right">{p.views.toLocaleString(locale)}</td>
                     <td className="py-1.5 text-right">{formatDuration(p.avg_time)}</td>
                     <td className="py-1.5 text-right">{p.entrances}</td>
                   </tr>
@@ -322,7 +334,7 @@ function FunnelStep({ label, value, pct }: { label: string; value: string | numb
   return (
     <div className="text-center">
       <p className="text-xs text-slate-500 mb-1">{label}</p>
-      <p className="text-lg font-bold">{typeof value === "number" ? value.toLocaleString("pl-PL") : value}</p>
+      <p className="text-lg font-bold">{typeof value === "number" ? value.toLocaleString(locale) : value}</p>
       {pct !== null && <p className="text-xs text-slate-400">{pct}%</p>}
     </div>
   );

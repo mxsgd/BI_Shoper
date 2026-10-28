@@ -4,6 +4,7 @@ import {
 } from "recharts";
 import { api } from "../api";
 import type { TopProductsData } from "../api";
+import { t, locale } from "../i18n";
 
 const PAGE_STEP = 20;
 const MAX_PRODUCTS = 100;
@@ -29,7 +30,7 @@ export default function Products() {
   };
 
   if (loading && !data) return <Loader />;
-  if (!data) return <p>Brak danych</p>;
+  if (!data) return <p>{t("Brak danych", "No data")}</p>;
 
   const chartData = data.products.map((p, i) => ({
     name: p.name.length > 25 ? p.name.slice(0, 25) + "…" : p.name,
@@ -47,49 +48,49 @@ export default function Products() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">Produkty — Top {shownProducts}</h2>
+        <h2 className="text-2xl font-bold">{t("Produkty", "Products")} — Top {shownProducts}</h2>
         <PeriodSelector value={period} onChange={setPeriodAndReset} />
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-8">
-        <Stat label={`Przychód (top ${shownProducts})`} value={`${totalRevenue.toLocaleString("pl-PL")} zł`} />
-        <Stat label="Sprzedanych szt." value={totalQty} />
-        <Stat label="Pareto 80%" value={`${data.products.filter((p) => p.cumulative_pct <= 80).length} produktów`} />
+        <Stat label={`${t("Przychód", "Revenue")} (top ${shownProducts})`} value={`${totalRevenue.toLocaleString(locale)} zł`} />
+        <Stat label={t("Sprzedanych szt.", "Units sold")} value={totalQty} />
+        <Stat label="Pareto 80%" value={`${data.products.filter((p) => p.cumulative_pct <= 80).length} ${t("produktów", "products")}`} />
       </div>
 
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100 mb-6">
-        <h3 className="text-sm font-semibold text-slate-700 mb-4">Analiza Pareto (przychód + krzywa kumulacyjna)</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-4">{t("Analiza Pareto (przychód + krzywa kumulacyjna)", "Pareto analysis (revenue + cumulative curve)")}</h3>
         <ResponsiveContainer width="100%" height={350}>
           <ComposedChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey="idx" tick={{ fontSize: 11 }} label={{ value: "Produkt #", position: "insideBottom", offset: -2, fontSize: 11 }} />
+            <XAxis dataKey="idx" tick={{ fontSize: 11 }} label={{ value: t("Produkt #", "Product #"), position: "insideBottom", offset: -2, fontSize: 11 }} />
             <YAxis yAxisId="rev" tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
             <YAxis yAxisId="pct" orientation="right" tick={{ fontSize: 11 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
             <Tooltip formatter={(v, name) =>
-              name === "Przychód"
-                ? `${Number(v ?? 0).toLocaleString("pl-PL")} zł`
+              name === t("Przychód", "Revenue")
+                ? `${Number(v ?? 0).toLocaleString(locale)} zł`
                 : `${Number(v ?? 0).toFixed(1)}%`
             } />
             <Legend />
-            <Bar yAxisId="rev" dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Przychód" />
-            <Line yAxisId="pct" dataKey="cumulative" stroke="#f59e0b" strokeWidth={2} dot={false} name="Kumulacyjny %" />
+            <Bar yAxisId="rev" dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name={t("Przychód", "Revenue")} />
+            <Line yAxisId="pct" dataKey="cumulative" stroke="#f59e0b" strokeWidth={2} dot={false} name={t("Kumulacyjny %", "Cumulative %")} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Ranking produktów</h3>
+        <h3 className="text-sm font-semibold text-slate-700 mb-3">{t("Ranking produktów", "Product ranking")}</h3>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-slate-500 border-b border-slate-100">
                 <th className="pb-2 pr-4">#</th>
-                <th className="pb-2 pr-4">Produkt</th>
-                <th className="pb-2 pr-4">Kategoria</th>
-                <th className="pb-2 pr-4 text-right">Szt.</th>
-                <th className="pb-2 pr-4 text-right">Przychód</th>
+                <th className="pb-2 pr-4">{t("Produkt", "Product")}</th>
+                <th className="pb-2 pr-4">{t("Kategoria", "Category")}</th>
+                <th className="pb-2 pr-4 text-right">{t("Szt.", "Qty")}</th>
+                <th className="pb-2 pr-4 text-right">{t("Przychód", "Revenue")}</th>
                 <th className="pb-2 pr-4 text-right">%</th>
-                <th className="pb-2 text-right">Kumulat. %</th>
+                <th className="pb-2 text-right">{t("Kumulat. %", "Cumul. %")}</th>
               </tr>
             </thead>
             <tbody>
@@ -99,7 +100,7 @@ export default function Products() {
                   <td className="py-2 pr-4 max-w-xs truncate font-medium">{p.name}</td>
                   <td className="py-2 pr-4 text-slate-500">{p.category || "—"}</td>
                   <td className="py-2 pr-4 text-right">{p.quantity}</td>
-                  <td className="py-2 pr-4 text-right font-medium">{p.revenue.toLocaleString("pl-PL")} zł</td>
+                  <td className="py-2 pr-4 text-right font-medium">{p.revenue.toLocaleString(locale)} zł</td>
                   <td className="py-2 pr-4 text-right">{p.revenue_pct}%</td>
                   <td className="py-2 text-right">{p.cumulative_pct.toFixed(1)}%</td>
                 </tr>
@@ -115,7 +116,7 @@ export default function Products() {
               disabled={loading}
               className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? "Wczytywanie..." : "Rozwiń dalej (+20)"}
+              {loading ? t("Wczytywanie...", "Loading...") : t("Rozwiń dalej (+20)", "Load more (+20)")}
             </button>
           </div>
         ) : null}
